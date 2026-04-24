@@ -1,0 +1,188 @@
+<script>
+    (function () {
+    
+    if (window.__promoLivrePatchApplied) return;
+    window.__promoLivrePatchApplied = true;
+    
+    const validSkus = [
+    8846,10141,8258,8794,8590,8592,7250,10171,10206,7660,8848,10759,8275,8796,
+    10733,8594,7248,8579,7662,8596,10264,8292,8792,10742,7246,7027,10773,8575,
+    10618,10787,8577,7029,8704,8706,7244,10604,8844,10221,8840,7240,10751,8842,
+    7242,10231,10214,10801,8586,8790,8588,7031,7252,10812,7501,10808,7672,6602,
+    6600,6598,6596,6592,6590,6594,7715,9221,8068,9759,9264,9773,9896,9141
+    ];
+    
+    function getPhotoBooks(){
+    if (!window.ceweDataLayer) return [];
+    const scInit = window.ceweDataLayer.find(ev => ev.action === "SC_INIT");
+    if (!scInit?.payLoad?.transactionProducts) return [];
+    return scInit.payLoad.transactionProducts.filter(product => {
+    const sku = product?.sku?.[0];
+    return validSkus.includes(sku);
+    });
+    }
+    
+    function createPromo(){
+    
+    const photoBooks = getPhotoBooks();
+    if (!photoBooks.length) return;
+    
+    const containers = document.querySelectorAll("cw-number-container.quantity-container");
+    if (!containers.length) return;
+    
+    containers.forEach((container,index)=>{
+    
+    if (document.getElementById("cewe-promo-banner-"+index)) return;
+    
+    const input = container.querySelector("input[type='number']");
+    if (!input) return;
+    
+    const plusBtn = container.querySelector(".csc-input-icon-right");
+    const minusBtn = container.querySelector(".csc-input-icon-left");
+    
+    const banner = document.createElement("div");
+    banner.id = "cewe-promo-banner-"+index;
+    
+    banner.style.marginTop = "4px";
+    banner.style.marginBottom = "16px";
+    banner.style.padding = "10px 14px";
+    banner.style.border = "1px solid #e0e0e0";
+    banner.style.borderRadius = "8px";
+    banner.style.fontFamily = "Arial,sans-serif";
+    banner.style.fontSize = "13px";
+    banner.style.position = "relative";
+    
+    banner.innerHTML = `
+    
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:10px;">
+    
+    <div style="display:flex;align-items:center;gap:8px;">
+    <div class="sg-cw-usp-symbol icon-brand-partners" style="width:18px;height:18px;filter:grayscale(100%) brightness(0);"></div>
+    <div id="cewe-promo-text"></div>
+    </div>
+    
+    <div class="cewe-info" style="position:relative;">
+    <span style="
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:16px;
+    height:16px;
+    border-radius:50%;
+    border:1px solid #bbb;
+    font-size:11px;
+    color:#666;
+    cursor:pointer;
+    ">i</span>
+    
+    <div class="cewe-tooltip" style="
+    display:none;
+    position:absolute;
+    top:120%;
+    right:0;
+    width:300px;
+    border:1px solid #ddd;
+    border-radius:6px;
+    padding:10px;
+    font-size:12px;
+    background:#fff;
+    box-shadow:0 4px 12px rgba(0,0,0,0.1);
+    z-index:100;
+    ">
+    Conditions : La remise s'appliquera automatiquement en commandant plusieurs livres photo (même format et papier. Votre création peut être différente). Au-delà de 10 exemplaires, contactez-nous. Remise applicable hors frais de traitement et d’envoi.
+    </div>
+    
+    </div>
+    
+    </div>
+    
+    <div style="height:6px;background:#eee;border-radius:3px;overflow:hidden;">
+    <div class="cewe-progress" style="height:100%;background:#d91c1c;width:0%;transition:width .4s"></div>
+    </div>
+    `;
+    
+    container.parentNode.insertBefore(banner,container.nextSibling);
+    
+    const info = banner.querySelector(".cewe-info");
+    const tooltip = banner.querySelector(".cewe-tooltip");
+    
+    function toggleTooltip(e){
+    e.stopPropagation();
+    tooltip.style.display =
+    tooltip.style.display==="block" ? "none" : "block";
+    }
+    
+    info.addEventListener("click",toggleTooltip);
+    
+    document.addEventListener("click",function(e){
+    if(!info.contains(e.target)){
+    tooltip.style.display="none";
+    }
+    });
+    
+    const text = banner.querySelector("#cewe-promo-text");
+    const bar = banner.querySelector(".cewe-progress");
+    
+    function updatePromo(){
+    
+    const qty = parseInt(input.value || 1);
+    
+    if(qty===1){
+    text.innerHTML="Ajoutez un exemplaire supplémentaire et profitez de <strong>-10 %</strong>.";
+    bar.style.width="20%";
+    }
+    
+    else if(qty===2){
+    text.innerHTML="Vous bénéficiez de <strong>-10 %</strong>. Ajoutez-en un autre pour atteindre <strong>-15 %</strong>.";
+    bar.style.width="40%";
+    }
+    
+    else if(qty===3){
+    text.innerHTML="Vous bénéficiez de <strong>-15 %</strong>. Encore <strong>2 exemplaires</strong> pour profiter de <strong>-20 %</strong>.";
+    bar.style.width="60%";
+    }
+    
+    else if(qty===4){
+    text.innerHTML="Vous bénéficiez de <strong>-15 %</strong>. Encore <strong>1 exemplaire</strong> pour profiter de <strong>-20 %</strong>.";
+    bar.style.width="80%";
+    }
+    
+    else{
+    text.innerHTML="Vous bénéficiez de <strong>-20 %</strong>, la remise maximale.";
+    bar.style.width="100%";
+    }
+    
+    }
+    
+    updatePromo();
+    
+    input.addEventListener("input",updatePromo);
+    
+    if(plusBtn){
+    plusBtn.addEventListener("click",()=>setTimeout(updatePromo,100));
+    }
+    
+    if(minusBtn){
+    minusBtn.addEventListener("click",()=>setTimeout(updatePromo,100));
+    }
+    
+    });
+    
+    }
+    
+    function handleTrackingEvent(event){
+    if(event?.action==="SC_INIT"){
+    setTimeout(createPromo,100);
+    }
+    }
+    
+    if(Array.isArray(window.ceweDataLayer)){
+    window.ceweDataLayer.forEach(ev=>handleTrackingEvent(ev));
+    }
+    
+    window.addEventListener("cw_tracking",function(ev){
+    if(ev?.detail) handleTrackingEvent(ev.detail);
+    });
+    
+    })();
+    </script>
