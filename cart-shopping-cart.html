@@ -8,12 +8,20 @@
                             _ngcontent-ng-c3940129742="" _nghost-ng-c4273432323="">
                             <style>
                                 .cewe-free-delivery {
-                                    margin: 10px 0 14px;
+                                    max-width: 75%;
+                                    margin: 10px 0 14px auto;
                                     padding: 12px 14px;
                                     border: 1px solid #e0e0e0;
                                     border-radius: 8px;
                                     background: #fff;
                                     font-family: Arial, sans-serif;
+                                }
+
+                                @media (max-width: 767px) {
+                                    .cewe-free-delivery {
+                                        max-width: none;
+                                        margin: 10px 12px 14px 12px;
+                                    }
                                 }
 
                                 .cewe-free-delivery__row {
@@ -47,10 +55,10 @@
 
                                 .cewe-free-delivery__track {
                                     position: relative;
-                                    height: 8px;
+                                    height: 6px;
                                     background: #eee;
                                     border-radius: 999px;
-                                    overflow: hidden;
+                                    margin: 12px 0;
                                 }
 
                                 .cewe-free-delivery__bar {
@@ -58,7 +66,11 @@
                                     width: 55%;
                                     background: #d91c1c;
                                     border-radius: 999px;
-                                    transition: width .35s ease;
+                                    transition: width .35s ease, background-color .35s ease;
+                                }
+
+                                .cewe-free-delivery__bar.is-complete {
+                                    background: #4FBB02;
                                 }
 
                                 .cewe-free-delivery__thumb {
@@ -66,18 +78,64 @@
                                     top: 50%;
                                     left: 55%;
                                     transform: translate(-50%, -50%);
-                                    width: 18px;
-                                    height: 18px;
+                                    width: 28px;
+                                    height: 28px;
                                     border-radius: 999px;
                                     background: #fff;
-                                    border: 2px solid #d91c1c;
-                                    box-shadow: 0 2px 8px rgba(0,0,0,.12);
+                                    border: 1px solid #d91c1c;
+                                    box-shadow: 0 2px 4px rgba(0,0,0,.1);
+                                    display: grid;
+                                    place-items: center;
+                                    transition: left .35s ease, border-color .35s ease;
+                                    z-index: 2;
+                                }
+
+                                .cewe-free-delivery__thumb.is-complete {
+                                    border-color: #4FBB02;
+                                }
+
+                                .cewe-free-delivery__truck {
+                                    width: 18px;
+                                    height: 18px;
+                                    display: flex;
+                                    align-items: center;
+                                    justify-content: center;
+                                }
+
+                                .cewe-free-delivery__truck svg {
+                                    width: 100%;
+                                    height: 100%;
+                                    display: block;
+                                    fill: #d91c1c;
+                                    transition: fill .35s ease;
+                                }
+
+                                .cewe-free-delivery__thumb.is-complete svg {
+                                    fill: #4FBB02;
                                 }
 
                                 .cewe-free-delivery__sub {
                                     margin-top: 8px;
                                     font-size: 12px;
                                     color: #666;
+                                }
+
+                                .cewe-free-delivery-separator {
+                                    display: block;
+                                    box-sizing: border-box;
+                                    width: 100%;
+                                    height: 14px;
+                                    background: #f7f4f2;
+                                    border-top: 1px solid #e9e3df;
+                                    border-bottom: 1px solid #e9e3df;
+                                    margin: 0 0 14px 0;
+                                }
+
+                                /* Podgląd: separator na pełną szerokość `.default-spacing` mimo paddingu */
+                                .default-spacing .cewe-free-delivery-separator {
+                                    width: calc(100% + 24px);
+                                    margin-left: -12px;
+                                    margin-right: -12px;
                                 }
                             </style>
 
@@ -90,12 +148,24 @@
                                 </div>
                                 <div class="cewe-free-delivery__track" aria-label="Postęp do darmowej dostawy">
                                     <div class="cewe-free-delivery__bar"></div>
-                                    <div class="cewe-free-delivery__thumb" aria-hidden="true"></div>
+                                    <div class="cewe-free-delivery__thumb" aria-hidden="true">
+                                        <span class="cewe-free-delivery__truck" aria-hidden="true">
+                                            <svg viewBox="0 0 297 297">
+                                                <path d="M242.309,210.424c-14.535,0-26.359,11.84-26.359,26.398c0,14.564,11.824,26.412,26.359,26.412 c14.541,0,26.362-11.848,26.362-26.412C268.671,222.264,256.85,210.424,242.309,210.424z"/>
+                                                <path d="M64.565,210.424c-14.542,0-26.366,11.84-26.366,26.398c0,14.564,11.824,26.412,26.366,26.412 c14.534,0,26.358-11.848,26.358-26.412C90.924,222.264,79.1,210.424,64.565,210.424z"/>
+                                                <path d="M257.182,99.523c-1.391-4.191-5.313-7.023-9.732-7.023H234.99v43.828h34.384L257.182,99.523z"/>
+                                                <path d="M290.21,152.73h-55.22v41.928c2.379-0.408,4.825-0.637,7.318-0.637c22.033,0,40.225,16.77,42.515,38.225h1.93 c5.657,0,10.247-4.59,10.247-10.254v-59.623C297,157.92,294.164,154.152,290.21,152.73z"/>
+                                                <path d="M218.199,44.02c0-5.664-4.59-10.254-10.248-10.254H10.247C4.59,33.766,0,38.355,0,44.02v177.973 c0,5.664,4.59,10.254,10.247,10.254h11.8c2.291-21.455,20.482-38.225,42.519-38.225c22.029,0,40.217,16.77,42.508,38.225h80.925 h11.8c1.38-12.918,8.521-24.123,18.796-31.008L218.199,44.02z"/>
+                                            </svg>
+                                        </span>
+                                    </div>
                                 </div>
                                 <div class="cewe-free-delivery__sub">
                                     (Podgląd UI — logikę podepniemy później pod kwotę koszyka)
+                                    <br>Threshold: 249 zł (mail) / 99 zł (pos)
                                 </div>
                             </div>
+                            <div class="cewe-free-delivery-separator" data-it-name="free-delivery-separator"></div>
                             <div _ngcontent-ng-c4273432323="" class="items"
                                 data-item-id="65bf4ddc-3c8b-4223-ad59-53903206ca82" data-it-name="items">
                                 <div _ngcontent-ng-c4273432323=""></div>
@@ -295,3 +365,5 @@
                 </div>
             </cw-tile><!----><!----></div><!---->
     </cw-display-shopping-cart><!----><!----><!----><!----></div>
+
+<span _ngcontent-ng-c4187904647="" class="total-sum-price bold" data-it-name="total-sum"> 51,98&nbsp;zł </span>

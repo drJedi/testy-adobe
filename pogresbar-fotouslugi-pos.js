@@ -1,11 +1,11 @@
 !(function () {
-  if (window.__ceweFreeDeliveryProgressApplied) return;
-  window.__ceweFreeDeliveryProgressApplied = true;
+  if (window.__fotoUslugiFreeDeliveryApplied) return;
+  window.__fotoUslugiFreeDeliveryApplied = true;
 
-  console.log("pogresbar-1s-test.js");
+  console.log("pogresbar-fotouslugi-pos.js");
 
-  let currentThreshold = 249.0;
-  let currentShippingType = "mail";
+  const POS_THRESHOLD = 99.0;
+  let currentShippingType = null;
   let currentCartTotal = undefined;
 
   function toInt(value) {
@@ -26,25 +26,17 @@
     return sumGrosze / 100;
   }
 
-  function updateThreshold(shippingType) {
-    if (shippingType === "pos") {
-      currentThreshold = 99.0;
-      currentShippingType = "pos";
-    } else {
-      currentThreshold = 249.0;
-      currentShippingType = "mail";
-    }
-    update();
-  }
-
   function handleDataLayerEvent(event) {
     if (event.action === "SC_INIT" || event.action === "SC_CHANGE_SHIPPING") {
       const shipping = event.payLoad?.transactionShipping;
       if (shipping) {
-        updateThreshold(shipping);
+        currentShippingType = shipping;
+        update();
       }
     }
 
+    // W SPA zdarza się, że zmiany ilości idą inną akcją (np. SC_CHANGE_SHIPPING),
+    // ale payload i tak niesie aktualne `transactionProducts`.
     const products = event.payLoad?.transactionProducts;
     if (Array.isArray(products)) {
       const total = calcCartTotalFromTransactionProducts(products);
@@ -131,9 +123,9 @@
   }
 
   function ensureStyles() {
-    if (document.getElementById("cewe-free-delivery-style")) return;
+    if (document.getElementById("fotouslugi-free-delivery-style")) return;
     const style = document.createElement("style");
-    style.id = "cewe-free-delivery-style";
+    style.id = "fotouslugi-free-delivery-style";
     style.textContent = `
       .cewe-free-delivery {
         max-width: 75%;
@@ -143,16 +135,10 @@
         border-radius: 8px;
         background: #fff;
         font-family: Arial, sans-serif;
+        display: none; /* Hidden by default */
       }
-      .cewe-free-delivery-separator {
+      .cewe-free-delivery.is-visible {
         display: block;
-        box-sizing: border-box;
-        width: 100%;
-        height: 14px;
-        background: #f7f4f2;
-        // border-top: 1px solid #e9e3df;
-        // border-bottom: 1px solidrgb(8, 6, 5);
-        margin: 0 0 14px 0;
       }
       @media (max-width: 767px) {
         .cewe-free-delivery {
@@ -183,7 +169,7 @@
       .cewe-free-delivery__bar {
         height: 100%;
         width: 0%;
-        background: #E81818;
+        background: #d91c1c;
         border-radius: 999px;
         transition: width .35s ease, background-color .35s ease;
       }
@@ -201,14 +187,14 @@
         place-items: center;
         border-radius: 25%;
         background: #fff;
-        border: 2px solid #E81818;
+        border: 2px solid #d91c1c;
         box-shadow: 0 2px 4px rgba(0,0,0,.1);
         pointer-events: none;
         transition: left .35s ease, border-color .35s ease;
         z-index: 2;
       }
       .cewe-free-delivery__thumb.is-complete {
-        border-color: #76B928;
+        border-color: #4FBB02;
       }
       .cewe-free-delivery__truck {
         width: 18px;
@@ -221,40 +207,18 @@
         width: 100%;
         height: 100%;
         display: block;
-        fill: #E81818;
+        fill: #d91c1c;
         transition: fill .35s ease;
       }
       .cewe-free-delivery__thumb.is-complete svg {
-        fill: #76B928;
+        fill: #4FBB02;
       }
     `;
     document.head.appendChild(style);
   }
 
   function getItemsTableRoot() {
-    // Target: cw-items-table (Angular component)
     return document.querySelector("cw-items-table");
-  }
-
-  function applySeparatorFullBleedToDefaultSpacing(separator, root) {
-    if (!separator || !root) return;
-    const container = root.closest?.(".default-spacing");
-    if (!container) return;
-
-    const cs = window.getComputedStyle(container);
-    const pl = parseFloat(cs.paddingLeft) || 0;
-    const pr = parseFloat(cs.paddingRight) || 0;
-
-    if (pl === 0 && pr === 0) {
-      separator.style.removeProperty("width");
-      separator.style.removeProperty("margin-left");
-      separator.style.removeProperty("margin-right");
-      return;
-    }
-
-    separator.style.width = `calc(100% + ${pl + pr}px)`;
-    separator.style.marginLeft = `-${pl}px`;
-    separator.style.marginRight = `-${pr}px`;
   }
 
   function ensureWidget() {
@@ -263,23 +227,8 @@
     if (!root) return null;
 
     const existing = root.querySelector("[data-it-name='free-delivery-progress']");
-    if (existing) {
-      const existingSeparator = root.querySelector(
-        "[data-it-name='free-delivery-separator']"
-      );
-      if (!existingSeparator) {
-        const separator = document.createElement("div");
-        separator.className = "cewe-free-delivery-separator";
-        separator.setAttribute("data-it-name", "free-delivery-separator");
-        root.insertBefore(separator, existing.nextSibling);
-        applySeparatorFullBleedToDefaultSpacing(separator, root);
-      } else {
-        applySeparatorFullBleedToDefaultSpacing(existingSeparator, root);
-      }
-      return existing;
-    }
+    if (existing) return existing;
 
-    // Insert as the first element inside cw-items-table, above .items
     const widget = document.createElement("div");
     widget.className = "cewe-free-delivery";
     widget.setAttribute("data-it-name", "free-delivery-progress");
@@ -303,18 +252,11 @@
       </div>
     `;
 
-    const separator = document.createElement("div");
-    separator.className = "cewe-free-delivery-separator";
-    separator.setAttribute("data-it-name", "free-delivery-separator");
-    applySeparatorFullBleedToDefaultSpacing(separator, root);
-
     const items = root.querySelector(".items");
     if (items && items.parentElement === root) {
       root.insertBefore(widget, items);
-      root.insertBefore(separator, items);
     } else {
       root.insertBefore(widget, root.firstChild);
-      root.insertBefore(separator, widget.nextSibling);
     }
 
     return widget;
@@ -323,6 +265,14 @@
   function update() {
     const widget = ensureWidget();
     if (!widget) return;
+
+    // Show only for POS
+    if (currentShippingType === "pos") {
+      widget.classList.add("is-visible");
+    } else {
+      widget.classList.remove("is-visible");
+      return;
+    }
 
     const title = widget.querySelector("[data-role='title']");
     const bar = widget.querySelector("[data-role='bar']");
@@ -336,57 +286,39 @@
       return;
     }
 
-    const missing = Math.max(0, currentThreshold - total);
-    const progress = clamp((total / currentThreshold) * 100, 0, 100);
+    const remaining = Math.max(0, POS_THRESHOLD - total);
+    const progressPercent = clamp((total / POS_THRESHOLD) * 100, 0, 100);
+    const isComplete = total >= POS_THRESHOLD;
 
-    const deliveryName = currentShippingType === "pos" ? "odbiór w punkcie" : "wysyłkę";
-
-    if (missing <= 0) {
-      if (title)
-        title.innerHTML = `Udało się! Zyskujesz <strong>darmową ${deliveryName}</strong>.`;
+    if (isComplete) {
+      if (title) title.innerHTML = `Gratulacje! Masz <strong>darmowy odbiór w drogerii</strong>.`;
       bar?.classList.add("is-complete");
       thumb?.classList.add("is-complete");
     } else {
-      if (title)
-        title.innerHTML = `Brakuje Ci <strong>${formatPln(missing)}&nbsp;zł</strong> do darmowej ${deliveryName}.`;
+      if (title) {
+        title.innerHTML = `Brakuje Ci <strong>${formatPln(remaining)}&nbsp;zł</strong> do darmowego odbioru w drogerii.`;
+      }
       bar?.classList.remove("is-complete");
       thumb?.classList.remove("is-complete");
     }
 
-    if (bar) bar.style.width = `${progress}%`;
-    if (thumb) thumb.style.left = `${progress}%`;
+    if (bar) bar.style.width = `${progressPercent}%`;
+    if (thumb) thumb.style.left = `${progressPercent}%`;
   }
 
-  function startObservers() {
-    initDataLayer();
-    startTotalSumObserver();
+  // Monitor changes in cart total
+  const observer = new MutationObserver(() => {
     update();
+  });
 
-    const target = document.body;
-    if (!target) return;
-
-    const mo = new MutationObserver(() => {
-      // throttle via rAF
-      if (startObservers._raf) return;
-      startObservers._raf = requestAnimationFrame(() => {
-        startObservers._raf = 0;
-        update();
-      });
-    });
-
-    mo.observe(target, {
-      subtree: true,
-      childList: true,
-      characterData: true,
-    });
-
-    // Fallback (np. gdy zmiana innerText nie triggeruje characterData w danym miejscu)
-    setInterval(update, 1500);
+  function startObserving() {
+    const target = document.querySelector(".total-sum-price") || document.body;
+    observer.observe(target, { childList: true, characterData: true, subtree: true });
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", startObservers, { once: true });
-  } else {
-    startObservers();
-  }
+  initDataLayer();
+  startTotalSumObserver();
+  startObserving();
+  update();
+
 })();
