@@ -15,15 +15,20 @@
 
   function calcCartTotalFromTransactionProducts(transactionProducts) {
     if (!Array.isArray(transactionProducts)) return undefined;
+    console.log("Processing transactionProducts:", transactionProducts);
     let sumGrosze = 0;
     for (const p of transactionProducts) {
       if (!p) continue;
       const basePrice = toInt(p.basePrice);
       if (typeof basePrice !== "number") continue;
       const qty = toInt(p.quantity) ?? 1;
+      const calculatedProductPrice = (basePrice * Math.max(1, qty)) / 100;
+      console.log(`Product: ${p.title || 'Unknown'}, basePrice (grosze): ${basePrice}, quantity: ${qty}, calculated: ${calculatedProductPrice} PLN`);
       sumGrosze += basePrice * Math.max(1, qty);
     }
-    return sumGrosze / 100;
+    const total = sumGrosze / 100;
+    console.log("Total from products (DataLayer):", total);
+    return total;
   }
 
   function updateThreshold(shippingType) {
@@ -56,12 +61,30 @@
   }
 
   function initDataLayer() {
+    const handle = (event) => {
+      if (event && (event.action || event.payLoad)) {
+        handleDataLayerEvent(event);
+      }
+    };
+    
     if (Array.isArray(window.ceweDataLayer)) {
-      window.ceweDataLayer.forEach(handleDataLayerEvent);
+      window.ceweDataLayer.forEach(handle);
     }
-    window.addEventListener("cw_tracking", (e) => {
-      if (e.detail) handleDataLayerEvent(e.detail);
-    });
+    
+    const originalPush = window.ceweDataLayer?.push;
+    if (typeof originalPush === "function") {
+      window.ceweDataLayer.push = function (...args) {
+        args.forEach(handle);
+        return originalPush.apply(this, args);
+      };
+    }
+    
+    const onTracking = (e) => {
+      if (e.detail) handle(e.detail);
+    };
+
+    window.addEventListener("cw_tracking", onTracking);
+    document.addEventListener("cw_tracking", onTracking);
   }
 
   function startTotalSumObserver() {
@@ -69,33 +92,39 @@
 
     const attach = (el) => {
       const read = () => {
-        const raw = el.innerText;
+        const raw = el.innerText || el.textContent;
         const v = parsePlnFromText(raw);
-        if (typeof v === "number") {
+        console.log("DOM total raw text:", raw, "parsed value:", v);
+        if (typeof v === "number" && v > 0) {
           currentCartTotal = v;
           update();
         }
       };
 
       read();
+      // Obserwujemy zmiany w samym elemencie ceny
       const mo = new MutationObserver(read);
       mo.observe(el, { characterData: true, childList: true, subtree: true });
     };
 
-    const existing = document.querySelector(selector);
-    if (existing) {
-      attach(existing);
-      return;
-    }
-
-    const mo = new MutationObserver(() => {
+    // Szukamy elementu regularnie, dopóki go nie znajdziemy
+    const findElement = () => {
       const el = document.querySelector(selector);
       if (el) {
-        mo.disconnect();
         attach(el);
+        return true;
       }
-    });
-    mo.observe(document.documentElement, { childList: true, subtree: true });
+      return false;
+    };
+
+    if (!findElement()) {
+      const mo = new MutationObserver(() => {
+        if (findElement()) {
+          mo.disconnect();
+        }
+      });
+      mo.observe(document.body, { childList: true, subtree: true });
+    }
   }
 
   function clamp(n, min, max) {
@@ -104,10 +133,13 @@
 
   function parsePlnFromText(text) {
     if (!text) return undefined;
+    // Usuwamy spacje (w tym &nbsp; / \u00A0), waluty i inne znaki niebędące cyframi, przecinkiem lub kropką
     const normalized = String(text)
-      .replace(/\u00A0/g, " ")
+      .replace(/\s/g, "")
+      .replace(/\u00A0/g, "")
       .replace(/[^\d,.\-]/g, "")
       .replace(",", ".");
+    
     const v = parseFloat(normalized);
     return Number.isNaN(v) ? undefined : v;
   }
@@ -124,10 +156,15 @@
   }
 
   function getCartTotal() {
-    if (typeof currentCartTotal === "number") return currentCartTotal;
     const el = document.querySelector(".total-sum-price");
-    const raw = el?.innerText;
-    return parsePlnFromText(raw);
+    const raw = el?.innerText || el?.textContent;
+    const fromDom = parsePlnFromText(raw);
+    
+    if (typeof fromDom === "number" && fromDom > 0) {
+      return fromDom;
+    }
+    
+    return currentCartTotal;
   }
 
   function ensureStyles() {
@@ -329,32 +366,59 @@
     const thumb = widget.querySelector("[data-role='thumb']");
 
     const total = getCartTotal();
+    const shipping = currentShippingType;
+
     if (typeof total !== "number") {
-      if (title) title.innerHTML = `Wczytuję kwotę koszyka…`;
-      if (bar) bar.style.width = "0%";
-      if (thumb) thumb.style.left = "0%";
+      const loadingText = `Wczytuję kwotę koszyka…`;
+      if (title && title.innerHTML !== loadingText) {
+        console.log("Setting loading text");
+        title.innerHTML = loadingText;
+      }
+      if (bar && bar.style.width !== "0%") bar.style.width = "0%";
+      if (thumb && thumb.style.left !== "0%") thumb.style.left = "0%";
       return;
     }
 
     const missing = Math.max(0, currentThreshold - total);
     const progress = clamp((total / currentThreshold) * 100, 0, 100);
+    const isComplete = total >= currentThreshold;
 
-    const deliveryName = currentShippingType === "pos" ? "odbiór w punkcie" : "wysyłkę";
+    console.log("update() - total:", total, "threshold:", currentThreshold, "missing:", missing, "isComplete:", isComplete);
 
-    if (missing <= 0) {
-      if (title)
-        title.innerHTML = `Udało się! Zyskujesz <strong>darmową ${deliveryName}</strong>.`;
-      bar?.classList.add("is-complete");
-      thumb?.classList.add("is-complete");
+    const deliveryName = shipping === "pos" ? "odbiór w punkcie" : "wysyłkę";
+
+    let newTitleHtml = "";
+    if (isComplete) {
+      newTitleHtml = `Udało się! Zyskujesz <strong>darmową ${deliveryName}</strong>.`;
     } else {
-      if (title)
-        title.innerHTML = `Brakuje Ci <strong>${formatPln(missing)}&nbsp;zł</strong> do darmowej ${deliveryName}.`;
-      bar?.classList.remove("is-complete");
-      thumb?.classList.remove("is-complete");
+      const remainingText = `${formatPln(missing)} zł`;
+      console.log("Formatted remainingText:", remainingText);
+      newTitleHtml = `Brakuje Ci <strong>${remainingText}</strong> do darmowej ${deliveryName}.`;
     }
 
-    if (bar) bar.style.width = `${progress}%`;
-    if (thumb) thumb.style.left = `${progress}%`;
+    if (title) {
+      const currentHtml = title.innerHTML.replace(/&nbsp;/g, " ");
+      const normalizedNewHtml = newTitleHtml.replace(/&nbsp;/g, " ");
+      
+      if (currentHtml !== normalizedNewHtml || title.textContent.trim() === "") {
+        console.log("Updating title to:", newTitleHtml);
+        title.innerHTML = newTitleHtml;
+      }
+    }
+
+    if (bar) {
+      const barComplete = bar.classList.contains("is-complete");
+      if (barComplete !== isComplete) bar.classList.toggle("is-complete", isComplete);
+      const newWidth = `${progress}%`;
+      if (bar.style.width !== newWidth) bar.style.width = newWidth;
+    }
+
+    if (thumb) {
+      const thumbComplete = thumb.classList.contains("is-complete");
+      if (thumbComplete !== isComplete) thumb.classList.toggle("is-complete", isComplete);
+      const newLeft = `${progress}%`;
+      if (thumb.style.left !== newLeft) thumb.style.left = newLeft;
+    }
   }
 
   function startObservers() {
@@ -365,7 +429,17 @@
     const target = document.body;
     if (!target) return;
 
-    const mo = new MutationObserver(() => {
+    const mo = new MutationObserver((mutations) => {
+      // Unikamy reakcji na własne zmiany wewnątrz widgetu
+      const isOwnMutation = mutations.every(m => {
+        const target = m.target;
+        return target.closest && (
+          target.closest("[data-it-name='free-delivery-progress']") ||
+          target.closest("[data-it-name='free-delivery-separator']")
+        );
+      });
+      if (isOwnMutation) return;
+
       // throttle via rAF
       if (startObservers._raf) return;
       startObservers._raf = requestAnimationFrame(() => {

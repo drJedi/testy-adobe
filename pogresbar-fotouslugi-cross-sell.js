@@ -19,15 +19,20 @@
 
   function calcCartTotalFromTransactionProducts(transactionProducts) {
     if (!Array.isArray(transactionProducts)) return undefined;
+    console.log("Processing transactionProducts:", transactionProducts);
     let sumGrosze = 0;
     for (const p of transactionProducts) {
       if (!p) continue;
       const basePrice = toInt(p.basePrice);
       if (typeof basePrice !== "number") continue;
       const qty = toInt(p.quantity) ?? 1;
+      const calculatedProductPrice = (basePrice * Math.max(1, qty)) / 100;
+      console.log(`Product: ${p.title || 'Unknown'}, basePrice (grosze): ${basePrice}, quantity: ${qty}, calculated: ${calculatedProductPrice} PLN`);
       sumGrosze += basePrice * Math.max(1, qty);
     }
-    return sumGrosze / 100;
+    const total = sumGrosze / 100;
+    console.log("Total from products (DataLayer):", total);
+    return total;
   }
 
   function applyTransactionProducts(transactionProducts) {
@@ -76,24 +81,32 @@
     return skus;
   }
 
+  let rafId = null;
+  function scheduleUpdate() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      update();
+      rafId = null;
+    });
+  }
+
   function handleDataLayerEvent(event) {
     const payload = event?.payLoad ?? event?.payload ?? {};
 
-    // Jeśli w payloadzie jest `transactionProducts`, traktujemy to jako aktualny snapshot koszyka,
-    // niezależnie od nazwy akcji (w SPA bywa to niespójne).
     if (Array.isArray(payload.transactionProducts)) {
       applyTransactionProducts(payload.transactionProducts);
+      scheduleUpdate();
     }
 
     if (event.action === "SC_INIT") {
       const shipping = payload.transactionShipping;
       if (shipping) currentShippingType = shipping;
-      update();
+      scheduleUpdate();
       return;
     }
 
     if (event.action === "SC_CHANGE_QUANTITY" || event.action === "SC_DELETE_ITEMS") {
-      update();
+      scheduleUpdate();
       return;
     }
 
@@ -102,37 +115,33 @@
       if (shipping) {
         currentShippingType = shipping;
       }
-      // W praktyce ten event może nieść też `transactionProducts` (np. zmiana quantity)
-      update();
+      scheduleUpdate();
     }
   }
 
   function initDataLayer() {
-    // In SPA `ceweDataLayer` może pojawić się później lub eventy mogły już polecieć.
-    // Robimy jedno podejście + retry przez krótki czas, bez rzucania błędów.
-    const hook = () => {
-      if (Array.isArray(window.ceweDataLayer)) {
-        window.ceweDataLayer.forEach(handleDataLayerEvent);
-        return true;
+    const handle = (event) => {
+      if (event && (event.action || event.payLoad)) {
+        handleDataLayerEvent(event);
       }
-      return false;
     };
 
-    hook();
+    if (Array.isArray(window.ceweDataLayer)) {
+      window.ceweDataLayer.forEach(handle);
+    }
 
-    const startedAt = Date.now();
-    const iv = setInterval(() => {
-      if (hook() || Date.now() - startedAt > 20000) {
-        clearInterval(iv);
-      }
-    }, 250);
+    const originalPush = window.ceweDataLayer?.push;
+    if (typeof originalPush === "function") {
+      window.ceweDataLayer.push = function (...args) {
+        args.forEach(handle);
+        return originalPush.apply(this, args);
+      };
+    }
 
     const onTracking = (e) => {
-      const detail = e?.detail;
-      if (detail) handleDataLayerEvent(detail);
+      if (e.detail) handle(e.detail);
     };
 
-    // W zależności od implementacji SPA event może być emitowany na window albo document.
     window.addEventListener("cw_tracking", onTracking);
     document.addEventListener("cw_tracking", onTracking);
   }
@@ -142,57 +151,45 @@
 
     const attach = (el) => {
       const read = () => {
-        const raw = el.innerText;
+        const raw = el.innerText || el.textContent;
         const v = parsePlnFromText(raw);
-        if (typeof v === "number") {
+        console.log("DOM total raw text:", raw, "parsed value:", v);
+        if (typeof v === "number" && v > 0) {
           currentCartTotal = v;
-          update();
+          scheduleUpdate();
         }
       };
 
       read();
+      // Obserwujemy zmiany w samym elemencie ceny
       const mo = new MutationObserver(read);
       mo.observe(el, { characterData: true, childList: true, subtree: true });
     };
 
-    const existing = document.querySelector(selector);
-    if (existing) {
-      attach(existing);
-      return;
+    // Szukamy elementu regularnie, dopóki go nie znajdziemy
+    const findElement = () => {
+      const el = document.querySelector(selector);
+      if (el) {
+        attach(el);
+        return true;
+      }
+      return false;
+    };
+
+    if (!findElement()) {
+      const mo = new MutationObserver(() => {
+        if (findElement()) {
+          mo.disconnect();
+        }
+      });
+      mo.observe(document.body, { childList: true, subtree: true });
     }
-
-    const mo = new MutationObserver(() => {
-      const el = document.querySelector(selector);
-      if (el) {
-        mo.disconnect();
-        attach(el);
-      }
-    });
-    mo.observe(document.documentElement, { childList: true, subtree: true });
-
-    // Safety: po 2s odpinamy MutationObserver (żeby nie obserwować całego DOM w nieskończoność),
-    // ale dalej spokojnie próbujemy znaleźć element pollingiem (bez blokowania).
-    setTimeout(() => mo.disconnect(), 2000);
-
-    const startedAt = Date.now();
-    const iv = setInterval(() => {
-      const el = document.querySelector(selector);
-      if (el) {
-        clearInterval(iv);
-        attach(el);
-        return;
-      }
-      if (Date.now() - startedAt > 20000) {
-        clearInterval(iv);
-      }
-    }, 250);
   }
 
   function startBootstrapRetry() {
     const startedAt = Date.now();
     const iv = setInterval(() => {
-      // `update()` jest bezpieczne (wyjdzie jeśli jeszcze nie ma DOM / danych)
-      update();
+      scheduleUpdate();
 
       const widgetExists = !!document.querySelector(
         "[data-it-name='free-delivery-progress-upsell']"
@@ -216,10 +213,13 @@
 
   function parsePlnFromText(text) {
     if (!text) return undefined;
+    // Usuwamy spacje (w tym &nbsp; / \u00A0), waluty i inne znaki niebędące cyframi, przecinkiem lub kropką
     const normalized = String(text)
-      .replace(/\u00A0/g, " ")
+      .replace(/\s/g, "")
+      .replace(/\u00A0/g, "")
       .replace(/[^\d,.\-]/g, "")
       .replace(",", ".");
+    
     const v = parseFloat(normalized);
     return Number.isNaN(v) ? undefined : v;
   }
@@ -236,10 +236,15 @@
   }
 
   function getCartTotal() {
-    if (typeof currentCartTotal === "number") return currentCartTotal;
     const el = document.querySelector(".total-sum-price");
-    const raw = el?.innerText;
-    return parsePlnFromText(raw);
+    const raw = el?.innerText || el?.textContent;
+    const fromDom = parsePlnFromText(raw);
+    
+    if (typeof fromDom === "number" && fromDom > 0) {
+      return fromDom;
+    }
+    
+    return currentCartTotal;
   }
 
   function ensureStyles() {
@@ -422,12 +427,16 @@
     const widget = ensureWidget();
     if (!widget) return;
 
-    if (currentShippingType === "pos") {
-      widget.classList.add("is-visible");
-    } else {
-      widget.classList.remove("is-visible");
-      return;
+    const total = getCartTotal();
+    const shipping = currentShippingType;
+
+    // Show only for POS
+    const shouldBeVisible = shipping === "pos";
+    if (widget.classList.contains("is-visible") !== shouldBeVisible) {
+      widget.classList.toggle("is-visible", shouldBeVisible);
     }
+
+    if (!shouldBeVisible) return;
 
     const title = widget.querySelector("[data-role='title']");
     const bar = widget.querySelector("[data-role='bar']");
@@ -435,37 +444,68 @@
     const upsell = widget.querySelector("[data-role='upsell']");
     const upsellText = widget.querySelector("[data-role='upsell-text']");
 
-    const total = getCartTotal();
     if (typeof total !== "number") {
-      if (title) title.innerHTML = `Wczytuję kwotę koszyka…`;
-      if (bar) bar.style.width = "0%";
-      if (thumb) thumb.style.left = "0%";
+      const loadingText = `Wczytuję kwotę koszyka…`;
+      if (title && title.innerHTML !== loadingText) {
+        console.log("Setting loading text");
+        title.innerHTML = loadingText;
+      }
+      if (bar && bar.style.width !== "0%") bar.style.width = "0%";
+      if (thumb && thumb.style.left !== "0%") thumb.style.left = "0%";
       return;
     }
 
     const remaining = Math.max(0, POS_THRESHOLD - total);
     const progressPercent = clamp((total / POS_THRESHOLD) * 100, 0, 100);
     const isComplete = total >= POS_THRESHOLD;
+
+    console.log("update() - total:", total, "remaining:", remaining, "isComplete:", isComplete);
+
+    let newTitleHtml = "";
     if (isComplete) {
-      if (title) title.innerHTML = `Gratulacje! Masz <strong>darmowy odbiór w drogerii</strong>.`;
-      bar?.classList.add("is-complete");
-      thumb?.classList.add("is-complete");
-      upsell?.classList.remove("is-active");
+      newTitleHtml = `Gratulacje! Masz <strong>darmowy odbiór w drogerii</strong>.`;
     } else {
-      if (title) {
-        title.innerHTML = `Brakuje Ci <strong>${formatPln(remaining)}&nbsp;zł</strong> do darmowego odbioru w drogerii.`;
+      const remainingText = `${formatPln(remaining)} zł`;
+      console.log("Formatted remainingText:", remainingText);
+      newTitleHtml = `Brakuje Ci <strong>${remainingText}</strong> do darmowego odbioru w drogerii.`;
+    }
+
+    if (title) {
+      // Porównujemy tekst, aby uniknąć migania, ale jeśli jest pusty lub różny - aktualizujemy
+      const currentHtml = title.innerHTML.replace(/&nbsp;/g, " ");
+      const normalizedNewHtml = newTitleHtml.replace(/&nbsp;/g, " ");
+      
+      if (currentHtml !== normalizedNewHtml || title.textContent.trim() === "") {
+        console.log("Updating title to:", newTitleHtml);
+        title.innerHTML = newTitleHtml;
       }
-      bar?.classList.remove("is-complete");
-      thumb?.classList.remove("is-complete");
+    }
 
-      if (remaining > 0) {
-        upsell?.classList.add("is-active");
+    if (bar) {
+      const barComplete = bar.classList.contains("is-complete");
+      if (barComplete !== isComplete) bar.classList.toggle("is-complete", isComplete);
+      const newWidth = `${progressPercent}%`;
+      if (bar.style.width !== newWidth) bar.style.width = newWidth;
+    }
 
-        if (upsellText) {
-          const remainingText = `${formatPln(remaining)}&nbsp;zł`;
+    if (thumb) {
+      const thumbComplete = thumb.classList.contains("is-complete");
+      if (thumbComplete !== isComplete) thumb.classList.toggle("is-complete", isComplete);
+      const newLeft = `${progressPercent}%`;
+      if (thumb.style.left !== newLeft) thumb.style.left = newLeft;
+    }
 
-          if (remaining >= UPSELL_HIGH_REMAINING_THRESHOLD) {
-            upsellText.innerHTML = `
+    if (upsell) {
+      const shouldUpsellActive = !isComplete && remaining > 0;
+      if (upsell.classList.contains("is-active") !== shouldUpsellActive) {
+        upsell.classList.toggle("is-active", shouldUpsellActive);
+      }
+
+      if (shouldUpsellActive && upsellText) {
+        let newUpsellHtml = "";
+        const remainingText = `${formatPln(remaining)}&nbsp;zł`;
+        if (remaining >= UPSELL_HIGH_REMAINING_THRESHOLD) {
+          newUpsellHtml = `
               Do darmowej dostawy brakuje Ci <strong>${remainingText}</strong>.
               Dobierz
               <a href="https://www.fotouslugi.pl/fotoprezenty/kula-ze-zdjeciem.html" class="cewe-free-delivery__upsell-link">kulę ze zdjęciem</a>
@@ -473,37 +513,40 @@
               <a href="https://www.fotouslugi.pl/zdjecia/zdjecie-w-ramce.html" class="cewe-free-delivery__upsell-link">zdjęcie w ramce</a>
               i odbierz zamówienie za darmo w drogerii.
             `;
-          } else {
-            if (hasPhotosInCart) {
-              upsellText.innerHTML = `
+        } else {
+          if (hasPhotosInCart) {
+            newUpsellHtml = `
                 Do darmowej dostawy brakuje Ci <strong>${remainingText}</strong>.
                 Dobierz
                 <a href="https://www.fotouslugi.pl/dodatki-do-fotoproduktow.html#dodatki-do-zdjec" class="cewe-free-delivery__upsell-link">dodatki do zdjęć</a>
                 i odbierz zamówienie za darmo w drogerii.
               `;
-            } else {
-              upsellText.innerHTML =
-                `Do darmowej dostawy brakuje Ci <strong>${remainingText}</strong>. ` +
-                `Dobierz <a href="https://www.fotouslugi.pl/zdjecia/standard.html" class="cewe-free-delivery__upsell-link">zdjęcia</a> ` +
-                `i odbierz zamówienie za darmo w drogerii.`;
-            }
+          } else {
+            newUpsellHtml =
+              `Do darmowej dostawy brakuje Ci <strong>${remainingText}</strong>. ` +
+              `Dobierz <a href="https://www.fotouslugi.pl/zdjecia/standard.html" class="cewe-free-delivery__upsell-link">zdjęcia</a> ` +
+              `i odbierz zamówienie za darmo w drogerii.`;
           }
         }
-      } else {
-        upsell?.classList.remove("is-active");
+        if (upsellText.innerHTML !== newUpsellHtml) {
+          upsellText.innerHTML = newUpsellHtml;
+        }
       }
     }
-
-    if (bar) bar.style.width = `${progressPercent}%`;
-    if (thumb) thumb.style.left = `${progressPercent}%`;
   }
 
-  const observer = new MutationObserver(() => {
-    update();
+  const observer = new MutationObserver((mutations) => {
+    const isOwnMutation = mutations.every(m => {
+      const target = m.target;
+      return target.closest && target.closest("[data-it-name='free-delivery-progress-upsell']");
+    });
+    if (!isOwnMutation) {
+      scheduleUpdate();
+    }
   });
 
   function startObserving() {
-    const target = document.querySelector(".total-sum-price") || document.body;
+    const target = document.body;
     observer.observe(target, { childList: true, characterData: true, subtree: true });
   }
 
@@ -511,6 +554,9 @@
   startTotalSumObserver();
   startObserving();
   startBootstrapRetry();
-  update();
+  scheduleUpdate();
+  
+  // Fallback
+  setInterval(scheduleUpdate, 2000);
 
 })();

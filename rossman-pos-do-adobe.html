@@ -1,133 +1,170 @@
 <script>
-   !(function () {
-  if (window.__fotoUslugiFreeDeliveryApplied) return;
-  window.__fotoUslugiFreeDeliveryApplied = true;
+    !(function () {
+        if (window.__fotoUslugiFreeDeliveryApplied) return;
+        window.__fotoUslugiFreeDeliveryApplied = true;
 
-  console.log("pogresbar-fotouslugi-pos.js");
+        console.log("pogresbar-fotouslugi-pos.js");
 
-  const POS_THRESHOLD = 99.0;
-  let currentShippingType = null;
-  let currentCartTotal = undefined;
+        const POS_THRESHOLD = 99.0;
+        let currentShippingType = null;
+        let currentCartTotal = undefined;
 
-  function toInt(value) {
-    const n = typeof value === "number" ? value : parseInt(String(value), 10);
-    return Number.isFinite(n) ? n : undefined;
-  }
-
-  function calcCartTotalFromTransactionProducts(transactionProducts) {
-    if (!Array.isArray(transactionProducts)) return undefined;
-    let sumGrosze = 0;
-    for (const p of transactionProducts) {
-      if (!p) continue;
-      const basePrice = toInt(p.basePrice);
-      if (typeof basePrice !== "number") continue;
-      const qty = toInt(p.quantity) ?? 1;
-      sumGrosze += basePrice * Math.max(1, qty);
-    }
-    return sumGrosze / 100;
-  }
-
-  function handleDataLayerEvent(event) {
-    if (event.action === "SC_INIT" || event.action === "SC_CHANGE_SHIPPING") {
-      const shipping = event.payLoad?.transactionShipping;
-      if (shipping) {
-        currentShippingType = shipping;
-        update();
-      }
-    }
-
-    // W SPA zdarza się, że zmiany ilości idą inną akcją (np. SC_CHANGE_SHIPPING),
-    // ale payload i tak niesie aktualne `transactionProducts`.
-    const products = event.payLoad?.transactionProducts;
-    if (Array.isArray(products)) {
-      const total = calcCartTotalFromTransactionProducts(products);
-      if (typeof total === "number") {
-        currentCartTotal = total;
-        update();
-      }
-    }
-  }
-
-  function initDataLayer() {
-    if (Array.isArray(window.ceweDataLayer)) {
-      window.ceweDataLayer.forEach(handleDataLayerEvent);
-    }
-    window.addEventListener("cw_tracking", (e) => {
-      if (e.detail) handleDataLayerEvent(e.detail);
-    });
-  }
-
-  function startTotalSumObserver() {
-    const selector = ".total-sum-price";
-
-    const attach = (el) => {
-      const read = () => {
-        const raw = el.innerText;
-        const v = parsePlnFromText(raw);
-        if (typeof v === "number") {
-          currentCartTotal = v;
-          update();
+        function toInt(value) {
+            const n = typeof value === "number" ? value : parseInt(String(value), 10);
+            return Number.isFinite(n) ? n : undefined;
         }
-      };
 
-      read();
-      const mo = new MutationObserver(read);
-      mo.observe(el, { characterData: true, childList: true, subtree: true });
-    };
+        function calcCartTotalFromTransactionProducts(transactionProducts) {
+            if (!Array.isArray(transactionProducts)) return undefined;
+            console.log("Processing transactionProducts:", transactionProducts);
+            let sumGrosze = 0;
+            for (const p of transactionProducts) {
+                if (!p) continue;
+                const basePrice = toInt(p.basePrice);
+                if (typeof basePrice !== "number") continue;
+                const qty = toInt(p.quantity) ?? 1;
+                const calculatedProductPrice = (basePrice * Math.max(1, qty)) / 100;
+                console.log(`Product: ${p.title || 'Unknown'}, basePrice (grosze): ${basePrice}, quantity: ${qty}, calculated: ${calculatedProductPrice} PLN`);
+                sumGrosze += basePrice * Math.max(1, qty);
+            }
+            const total = sumGrosze / 100;
+            console.log("Total from products (DataLayer):", total);
+            return total;
+        }
 
-    const existing = document.querySelector(selector);
-    if (existing) {
-      attach(existing);
-      return;
-    }
+        let rafId = null;
+        function scheduleUpdate() {
+            if (rafId) return;
+            rafId = requestAnimationFrame(() => {
+                update();
+                rafId = null;
+            });
+        }
 
-    const mo = new MutationObserver(() => {
-      const el = document.querySelector(selector);
-      if (el) {
-        mo.disconnect();
-        attach(el);
-      }
-    });
-    mo.observe(document.documentElement, { childList: true, subtree: true });
-  }
+        function handleDataLayerEvent(event) {
+            if (event.action === "SC_INIT" || event.action === "SC_CHANGE_SHIPPING") {
+                const shipping = event.payLoad?.transactionShipping;
+                if (shipping) {
+                    currentShippingType = shipping;
+                    scheduleUpdate();
+                }
+            }
 
-  function clamp(n, min, max) {
-    return Math.min(max, Math.max(min, n));
-  }
+            const products = event.payLoad?.transactionProducts;
+            if (Array.isArray(products)) {
+                const total = calcCartTotalFromTransactionProducts(products);
+                if (typeof total === "number") {
+                    currentCartTotal = total;
+                    scheduleUpdate();
+                }
+            }
+        }
 
-  function parsePlnFromText(text) {
-    if (!text) return undefined;
-    const normalized = String(text)
-      .replace(/\u00A0/g, " ")
-      .replace(/[^\d,.\-]/g, "")
-      .replace(",", ".");
-    const v = parseFloat(normalized);
-    return Number.isNaN(v) ? undefined : v;
-  }
+        function initDataLayer() {
+            const handle = (event) => {
+                if (event && (event.action || event.payLoad)) {
+                    handleDataLayerEvent(event);
+                }
+            };
 
-  function formatPln(value) {
-    try {
-      return new Intl.NumberFormat("pl-PL", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(value);
-    } catch {
-      return value.toFixed(2).replace(".", ",");
-    }
-  }
+            if (Array.isArray(window.ceweDataLayer)) {
+                window.ceweDataLayer.forEach(handle);
+            }
 
-  function getCartTotal() {
-    if (typeof currentCartTotal === "number") return currentCartTotal;
-    const el = document.querySelector(".total-sum-price");
-    const raw = el?.innerText;
-    return parsePlnFromText(raw);
-  }
+            // Nadpisujemy push, aby przechwytywać nowe zdarzenia natychmiast
+            const originalPush = window.ceweDataLayer?.push;
+            if (typeof originalPush === "function") {
+                window.ceweDataLayer.push = function (...args) {
+                    args.forEach(handle);
+                    return originalPush.apply(this, args);
+                };
+            }
 
-  function ensureStyles() {
-    if (document.getElementById("fotouslugi-free-delivery-style")) return;
-    const style = document.createElement("style");
-    style.id = "fotouslugi-free-delivery-style";
-    style.textContent = `
+            window.addEventListener("cw_tracking", (e) => {
+                if (e.detail) handle(e.detail);
+            });
+            document.addEventListener("cw_tracking", (e) => {
+                if (e.detail) handle(e.detail);
+            });
+        }
+
+        function startTotalSumObserver() {
+            const selector = ".total-sum-price";
+
+            const attach = (el) => {
+                const read = () => {
+                    const raw = el.innerText;
+                    const v = parsePlnFromText(raw);
+                    console.log("DOM total raw text:", raw, "parsed value:", v);
+                    if (typeof v === "number") {
+                        currentCartTotal = v;
+                        scheduleUpdate();
+                    }
+                };
+
+                read();
+                const mo = new MutationObserver(read);
+                mo.observe(el, { characterData: true, childList: true, subtree: true });
+            };
+
+            const existing = document.querySelector(selector);
+            if (existing) {
+                attach(existing);
+                return;
+            }
+
+            const mo = new MutationObserver(() => {
+                const el = document.querySelector(selector);
+                if (el) {
+                    mo.disconnect();
+                    attach(el);
+                }
+            });
+            mo.observe(document.documentElement, { childList: true, subtree: true });
+        }
+
+        function clamp(n, min, max) {
+            return Math.min(max, Math.max(min, n));
+        }
+
+        function parsePlnFromText(text) {
+            if (!text) return undefined;
+            const normalized = String(text)
+                .replace(/\u00A0/g, " ")
+                .replace(/[^\d,.\-]/g, "")
+                .replace(",", ".");
+            const v = parseFloat(normalized);
+            return Number.isNaN(v) ? undefined : v;
+        }
+
+        function formatPln(value) {
+            try {
+                return new Intl.NumberFormat("pl-PL", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                }).format(value);
+            } catch {
+                return value.toFixed(2).replace(".", ",");
+            }
+        }
+
+        function getCartTotal() {
+            const el = document.querySelector(".total-sum-price");
+            const raw = el?.innerText;
+            const fromDom = parsePlnFromText(raw);
+
+            if (typeof fromDom === "number" && fromDom > 0) {
+                return fromDom;
+            }
+
+            return currentCartTotal;
+        }
+
+        function ensureStyles() {
+            if (document.getElementById("fotouslugi-free-delivery-style")) return;
+            const style = document.createElement("style");
+            style.id = "fotouslugi-free-delivery-style";
+            style.textContent = `
       .cewe-free-delivery {
         max-width: 75%;
         margin: 10px 0 14px auto;
@@ -215,25 +252,25 @@
         fill: #4FBB02;
       }
     `;
-    document.head.appendChild(style);
-  }
+            document.head.appendChild(style);
+        }
 
-  function getItemsTableRoot() {
-    return document.querySelector("cw-items-table");
-  }
+        function getItemsTableRoot() {
+            return document.querySelector("cw-items-table");
+        }
 
-  function ensureWidget() {
-    ensureStyles();
-    const root = getItemsTableRoot();
-    if (!root) return null;
+        function ensureWidget() {
+            ensureStyles();
+            const root = getItemsTableRoot();
+            if (!root) return null;
 
-    const existing = root.querySelector("[data-it-name='free-delivery-progress']");
-    if (existing) return existing;
+            const existing = root.querySelector("[data-it-name='free-delivery-progress']");
+            if (existing) return existing;
 
-    const widget = document.createElement("div");
-    widget.className = "cewe-free-delivery";
-    widget.setAttribute("data-it-name", "free-delivery-progress");
-    widget.innerHTML = `
+            const widget = document.createElement("div");
+            widget.className = "cewe-free-delivery";
+            widget.setAttribute("data-it-name", "free-delivery-progress");
+            widget.innerHTML = `
       <div class="cewe-free-delivery__row">
         <div class="cewe-free-delivery__title" data-role="title"></div>
       </div>
@@ -253,76 +290,79 @@
       </div>
     `;
 
-    const items = root.querySelector(".items");
-    if (items && items.parentElement === root) {
-      root.insertBefore(widget, items);
-    } else {
-      root.insertBefore(widget, root.firstChild);
-    }
+            const items = root.querySelector(".items");
+            if (items && items.parentElement === root) {
+                root.insertBefore(widget, items);
+            } else {
+                root.insertBefore(widget, root.firstChild);
+            }
 
-    return widget;
-  }
+            return widget;
+        }
 
-  function update() {
-    const widget = ensureWidget();
-    if (!widget) return;
+        function update() {
+            const widget = ensureWidget();
+            if (!widget) return;
 
-    // Show only for POS
-    if (currentShippingType === "pos") {
-      widget.classList.add("is-visible");
-    } else {
-      widget.classList.remove("is-visible");
-      return;
-    }
+            // Show only for POS
+            if (currentShippingType === "pos") {
+                widget.classList.add("is-visible");
+            } else {
+                widget.classList.remove("is-visible");
+                return;
+            }
 
-    const title = widget.querySelector("[data-role='title']");
-    const bar = widget.querySelector("[data-role='bar']");
-    const thumb = widget.querySelector("[data-role='thumb']");
+            const title = widget.querySelector("[data-role='title']");
+            const bar = widget.querySelector("[data-role='bar']");
+            const thumb = widget.querySelector("[data-role='thumb']");
 
-    const total = getCartTotal();
-    if (typeof total !== "number") {
-      if (title) title.innerHTML = `Wczytuję kwotę koszyka…`;
-      if (bar) bar.style.width = "0%";
-      if (thumb) thumb.style.left = "0%";
-      return;
-    }
+            const total = getCartTotal();
+            if (typeof total !== "number") {
+                if (title) title.innerHTML = `Wczytuję kwotę koszyka…`;
+                if (bar) bar.style.width = "0%";
+                if (thumb) thumb.style.left = "0%";
+                return;
+            }
 
-    const remaining = Math.max(0, POS_THRESHOLD - total);
-    const progressPercent = clamp((total / POS_THRESHOLD) * 100, 0, 100);
-    const isComplete = total >= POS_THRESHOLD;
+            const remaining = Math.max(0, POS_THRESHOLD - total);
+            const progressPercent = clamp((total / POS_THRESHOLD) * 100, 0, 100);
+            const isComplete = total >= POS_THRESHOLD;
 
-    if (isComplete) {
-      if (title) title.innerHTML = `Gratulacje! Masz <strong>darmowy odbiór w drogerii</strong>.`;
-      bar?.classList.add("is-complete");
-      thumb?.classList.add("is-complete");
-    } else {
-      if (title) {
-        title.innerHTML = `Brakuje Ci <strong>${formatPln(remaining)}&nbsp;zł</strong> do darmowego odbioru w drogerii.`;
-      }
-      bar?.classList.remove("is-complete");
-      thumb?.classList.remove("is-complete");
-    }
+            if (isComplete) {
+                if (title) title.innerHTML = `Gratulacje! Masz <strong>darmowy odbiór w drogerii</strong>.`;
+                bar?.classList.add("is-complete");
+                thumb?.classList.add("is-complete");
+            } else {
+                if (title) {
+                    title.innerHTML = `Brakuje Ci <strong>${formatPln(remaining)}&nbsp;zł</strong> do darmowego odbioru w drogerii.`;
+                }
+                bar?.classList.remove("is-complete");
+                thumb?.classList.remove("is-complete");
+            }
 
-    if (bar) bar.style.width = `${progressPercent}%`;
-    if (thumb) thumb.style.left = `${progressPercent}%`;
-  }
+            if (bar) bar.style.width = `${progressPercent}%`;
+            if (thumb) thumb.style.left = `${progressPercent}%`;
+        }
 
-  // Monitor changes in cart total
-  const observer = new MutationObserver(() => {
-    update();
-  });
+        // Monitor changes in cart total
+        const observer = new MutationObserver(() => {
+            scheduleUpdate();
+        });
 
-  function startObserving() {
-    const target = document.querySelector(".total-sum-price") || document.body;
-    observer.observe(target, { childList: true, characterData: true, subtree: true });
-  }
+        function startObserving() {
+            const target = document.body;
+            observer.observe(target, { childList: true, characterData: true, subtree: true });
+        }
 
-  initDataLayer();
-  startTotalSumObserver();
-  startObserving();
-  update();
+        initDataLayer();
+        startTotalSumObserver();
+        startObserving();
+        scheduleUpdate();
 
-})();
+        // Fallback
+        setInterval(scheduleUpdate, 2000);
+
+    })();
 
 
 </script>

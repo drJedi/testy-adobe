@@ -15,15 +15,29 @@
 
   function calcCartTotalFromTransactionProducts(transactionProducts) {
     if (!Array.isArray(transactionProducts)) return undefined;
+    console.log("Processing transactionProducts:", transactionProducts);
     let sumGrosze = 0;
     for (const p of transactionProducts) {
       if (!p) continue;
       const basePrice = toInt(p.basePrice);
       if (typeof basePrice !== "number") continue;
       const qty = toInt(p.quantity) ?? 1;
+      const calculatedProductPrice = (basePrice * Math.max(1, qty)) / 100;
+      console.log(`Product: ${p.title || 'Unknown'}, basePrice (grosze): ${basePrice}, quantity: ${qty}, calculated: ${calculatedProductPrice} PLN`);
       sumGrosze += basePrice * Math.max(1, qty);
     }
-    return sumGrosze / 100;
+    const total = sumGrosze / 100;
+    console.log("Total from products (DataLayer):", total);
+    return total;
+  }
+
+  let rafId = null;
+  function scheduleUpdate() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      update();
+      rafId = null;
+    });
   }
 
   function handleDataLayerEvent(event) {
@@ -31,28 +45,45 @@
       const shipping = event.payLoad?.transactionShipping;
       if (shipping) {
         currentShippingType = shipping;
-        update();
+        scheduleUpdate();
       }
     }
 
-    // W SPA zdarza się, że zmiany ilości idą inną akcją (np. SC_CHANGE_SHIPPING),
-    // ale payload i tak niesie aktualne `transactionProducts`.
     const products = event.payLoad?.transactionProducts;
     if (Array.isArray(products)) {
       const total = calcCartTotalFromTransactionProducts(products);
       if (typeof total === "number") {
         currentCartTotal = total;
-        update();
+        scheduleUpdate();
       }
     }
   }
 
   function initDataLayer() {
+    const handle = (event) => {
+      if (event && (event.action || event.payLoad)) {
+        handleDataLayerEvent(event);
+      }
+    };
+
     if (Array.isArray(window.ceweDataLayer)) {
-      window.ceweDataLayer.forEach(handleDataLayerEvent);
+      window.ceweDataLayer.forEach(handle);
     }
+
+    // Nadpisujemy push, aby przechwytywać nowe zdarzenia natychmiast
+    const originalPush = window.ceweDataLayer?.push;
+    if (typeof originalPush === "function") {
+      window.ceweDataLayer.push = function (...args) {
+        args.forEach(handle);
+        return originalPush.apply(this, args);
+      };
+    }
+
     window.addEventListener("cw_tracking", (e) => {
-      if (e.detail) handleDataLayerEvent(e.detail);
+      if (e.detail) handle(e.detail);
+    });
+    document.addEventListener("cw_tracking", (e) => {
+      if (e.detail) handle(e.detail);
     });
   }
 
@@ -61,33 +92,39 @@
 
     const attach = (el) => {
       const read = () => {
-        const raw = el.innerText;
+        const raw = el.innerText || el.textContent;
         const v = parsePlnFromText(raw);
-        if (typeof v === "number") {
+        console.log("DOM total raw text:", raw, "parsed value:", v);
+        if (typeof v === "number" && v > 0) {
           currentCartTotal = v;
-          update();
+          scheduleUpdate();
         }
       };
 
       read();
+      // Obserwujemy zmiany w samym elemencie ceny
       const mo = new MutationObserver(read);
       mo.observe(el, { characterData: true, childList: true, subtree: true });
     };
 
-    const existing = document.querySelector(selector);
-    if (existing) {
-      attach(existing);
-      return;
-    }
-
-    const mo = new MutationObserver(() => {
+    // Szukamy elementu regularnie, dopóki go nie znajdziemy
+    const findElement = () => {
       const el = document.querySelector(selector);
       if (el) {
-        mo.disconnect();
         attach(el);
+        return true;
       }
-    });
-    mo.observe(document.documentElement, { childList: true, subtree: true });
+      return false;
+    };
+
+    if (!findElement()) {
+      const mo = new MutationObserver(() => {
+        if (findElement()) {
+          mo.disconnect();
+        }
+      });
+      mo.observe(document.body, { childList: true, subtree: true });
+    }
   }
 
   function clamp(n, min, max) {
@@ -96,10 +133,13 @@
 
   function parsePlnFromText(text) {
     if (!text) return undefined;
+    // Usuwamy spacje (w tym &nbsp; / \u00A0), waluty i inne znaki niebędące cyframi, przecinkiem lub kropką
     const normalized = String(text)
-      .replace(/\u00A0/g, " ")
+      .replace(/\s/g, "")
+      .replace(/\u00A0/g, "")
       .replace(/[^\d,.\-]/g, "")
       .replace(",", ".");
+    
     const v = parseFloat(normalized);
     return Number.isNaN(v) ? undefined : v;
   }
@@ -116,10 +156,15 @@
   }
 
   function getCartTotal() {
-    if (typeof currentCartTotal === "number") return currentCartTotal;
     const el = document.querySelector(".total-sum-price");
-    const raw = el?.innerText;
-    return parsePlnFromText(raw);
+    const raw = el?.innerText || el?.textContent;
+    const fromDom = parsePlnFromText(raw);
+    
+    if (typeof fromDom === "number" && fromDom > 0) {
+      return fromDom;
+    }
+    
+    return currentCartTotal;
   }
 
   function ensureStyles() {
@@ -266,23 +311,29 @@
     const widget = ensureWidget();
     if (!widget) return;
 
+    const total = getCartTotal();
+    const shipping = currentShippingType;
+
     // Show only for POS
-    if (currentShippingType === "pos") {
-      widget.classList.add("is-visible");
-    } else {
-      widget.classList.remove("is-visible");
-      return;
+    const shouldBeVisible = shipping === "pos";
+    if (widget.classList.contains("is-visible") !== shouldBeVisible) {
+      widget.classList.toggle("is-visible", shouldBeVisible);
     }
+    
+    if (!shouldBeVisible) return;
 
     const title = widget.querySelector("[data-role='title']");
     const bar = widget.querySelector("[data-role='bar']");
     const thumb = widget.querySelector("[data-role='thumb']");
 
-    const total = getCartTotal();
     if (typeof total !== "number") {
-      if (title) title.innerHTML = `Wczytuję kwotę koszyka…`;
-      if (bar) bar.style.width = "0%";
-      if (thumb) thumb.style.left = "0%";
+      const loadingText = `Wczytuję kwotę koszyka…`;
+      if (title && title.innerHTML !== loadingText) {
+        console.log("Setting loading text");
+        title.innerHTML = loadingText;
+      }
+      if (bar && bar.style.width !== "0%") bar.style.width = "0%";
+      if (thumb && thumb.style.left !== "0%") thumb.style.left = "0%";
       return;
     }
 
@@ -290,35 +341,65 @@
     const progressPercent = clamp((total / POS_THRESHOLD) * 100, 0, 100);
     const isComplete = total >= POS_THRESHOLD;
 
+    console.log("update() - total:", total, "remaining:", remaining, "isComplete:", isComplete);
+
+    let newTitleHtml = "";
     if (isComplete) {
-      if (title) title.innerHTML = `Gratulacje! Masz <strong>darmowy odbiór w drogerii</strong>.`;
-      bar?.classList.add("is-complete");
-      thumb?.classList.add("is-complete");
+      newTitleHtml = `Gratulacje! Masz <strong>darmowy odbiór w drogerii</strong>.`;
     } else {
-      if (title) {
-        title.innerHTML = `Brakuje Ci <strong>${formatPln(remaining)}&nbsp;zł</strong> do darmowego odbioru w drogerii.`;
-      }
-      bar?.classList.remove("is-complete");
-      thumb?.classList.remove("is-complete");
+      const remainingText = `${formatPln(remaining)} zł`;
+      console.log("Formatted remainingText:", remainingText);
+      newTitleHtml = `Brakuje Ci <strong>${remainingText}</strong> do darmowego odbioru w drogerii.`;
     }
 
-    if (bar) bar.style.width = `${progressPercent}%`;
-    if (thumb) thumb.style.left = `${progressPercent}%`;
+    if (title) {
+      const currentHtml = title.innerHTML.replace(/&nbsp;/g, " ");
+      const normalizedNewHtml = newTitleHtml.replace(/&nbsp;/g, " ");
+      
+      if (currentHtml !== normalizedNewHtml || title.textContent.trim() === "") {
+        console.log("Updating title to:", newTitleHtml);
+        title.innerHTML = newTitleHtml;
+      }
+    }
+
+    if (bar) {
+      const barComplete = bar.classList.contains("is-complete");
+      if (barComplete !== isComplete) bar.classList.toggle("is-complete", isComplete);
+      const newWidth = `${progressPercent}%`;
+      if (bar.style.width !== newWidth) bar.style.width = newWidth;
+    }
+
+    if (thumb) {
+      const thumbComplete = thumb.classList.contains("is-complete");
+      if (thumbComplete !== isComplete) thumb.classList.toggle("is-complete", isComplete);
+      const newLeft = `${progressPercent}%`;
+      if (thumb.style.left !== newLeft) thumb.style.left = newLeft;
+    }
   }
 
   // Monitor changes in cart total
-  const observer = new MutationObserver(() => {
-    update();
+  const observer = new MutationObserver((mutations) => {
+    // Unikamy reakcji na własne zmiany wewnątrz widgetu
+    const isOwnMutation = mutations.every(m => {
+      const target = m.target;
+      return target.closest && target.closest("[data-it-name='free-delivery-progress']");
+    });
+    if (!isOwnMutation) {
+      scheduleUpdate();
+    }
   });
 
   function startObserving() {
-    const target = document.querySelector(".total-sum-price") || document.body;
+    const target = document.body;
     observer.observe(target, { childList: true, characterData: true, subtree: true });
   }
 
   initDataLayer();
   startTotalSumObserver();
   startObserving();
-  update();
+  scheduleUpdate();
+  
+  // Fallback
+  setInterval(scheduleUpdate, 2000);
 
 })();
