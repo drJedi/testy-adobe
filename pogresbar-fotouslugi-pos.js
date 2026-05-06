@@ -160,10 +160,13 @@
     const raw = el?.innerText || el?.textContent;
     const fromDom = parsePlnFromText(raw);
     
+    console.log("getCartTotal() - DOM raw:", raw, "parsed:", fromDom);
+    
     if (typeof fromDom === "number" && fromDom > 0) {
       return fromDom;
     }
     
+    console.log("getCartTotal() - Fallback to currentCartTotal:", currentCartTotal);
     return currentCartTotal;
   }
 
@@ -314,6 +317,9 @@
     const total = getCartTotal();
     const shipping = currentShippingType;
 
+    const bar = widget.querySelector("[data-role='bar']");
+    const thumb = widget.querySelector("[data-role='thumb']");
+
     // Show only for POS
     const shouldBeVisible = shipping === "pos";
     if (widget.classList.contains("is-visible") !== shouldBeVisible) {
@@ -323,40 +329,30 @@
     if (!shouldBeVisible) return;
 
     const title = widget.querySelector("[data-role='title']");
-    const bar = widget.querySelector("[data-role='bar']");
-    const thumb = widget.querySelector("[data-role='thumb']");
 
-    if (typeof total !== "number") {
-      const loadingText = `Wczytuję kwotę koszyka…`;
-      if (title && title.innerHTML !== loadingText) {
-        console.log("Setting loading text");
-        title.innerHTML = loadingText;
-      }
-      if (bar && bar.style.width !== "0%") bar.style.width = "0%";
-      if (thumb && thumb.style.left !== "0%") thumb.style.left = "0%";
-      return;
-    }
+    const remaining = Math.max(0, POS_THRESHOLD - (total || 0));
+    const progressPercent = clamp(((total || 0) / POS_THRESHOLD) * 100, 0, 100);
+    const isComplete = (total || 0) >= POS_THRESHOLD;
 
-    const remaining = Math.max(0, POS_THRESHOLD - total);
-    const progressPercent = clamp((total / POS_THRESHOLD) * 100, 0, 100);
-    const isComplete = total >= POS_THRESHOLD;
-
-    console.log("update() - total:", total, "remaining:", remaining, "isComplete:", isComplete);
+    console.log("update() - POS_THRESHOLD:", POS_THRESHOLD, "total:", total, "remaining:", remaining, "isComplete:", isComplete);
 
     let newTitleHtml = "";
     if (isComplete) {
       newTitleHtml = `Gratulacje! Masz <strong>darmowy odbiór w drogerii</strong>.`;
     } else {
-      const remainingText = `${formatPln(remaining)} zł`;
+      const remainingText = `${formatPln(remaining)}&nbsp;zł`;
       console.log("Formatted remainingText:", remainingText);
       newTitleHtml = `Brakuje Ci <strong>${remainingText}</strong> do darmowego odbioru w drogerii.`;
     }
 
     if (title) {
-      const currentHtml = title.innerHTML.replace(/&nbsp;/g, " ");
-      const normalizedNewHtml = newTitleHtml.replace(/&nbsp;/g, " ");
+      // Normalizujemy tekst do porównania (usuwamy &nbsp; i zbędne spacje)
+      const currentHtml = title.innerHTML.replace(/&nbsp;|\s/g, " ");
+      const normalizedNewHtml = newTitleHtml.replace(/&nbsp;|\s/g, " ");
       
-      if (currentHtml !== normalizedNewHtml || title.textContent.trim() === "") {
+      const isTitleEmpty = title.textContent.trim() === "";
+      
+      if (currentHtml !== normalizedNewHtml || isTitleEmpty) {
         console.log("Updating title to:", newTitleHtml);
         title.innerHTML = newTitleHtml;
       }

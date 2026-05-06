@@ -1,258 +1,594 @@
 <script>
-    !(function () {
-        if (window.__fotoUslugiCrossSellApplied) return;
-        window.__fotoUslugiCrossSellApplied = true;
+!(function () {
+  // SPA-safe: obserwujemy TYLKO `.total-sum-price` + fallback na event `SC_CHANGE_SHIPPING`.
+  if (window.__fotoUslugiCrossSellApplied) return;
+  window.__fotoUslugiCrossSellApplied = true;
 
-        const POS_THRESHOLD = 99.0;
-        const UPSELL_HIGH_REMAINING_THRESHOLD = 70.0;
-        const PHOTO_SKUS = [
-            7924, 7930, 7918, 7932, 7926, 7934, 7928, 7936, 7925, 7931, 7933, 7935, 7929,
-            7937, 7927, 7919,
-        ];
-        let currentShippingType = null;
-        let hasPhotosInCart = false;
-        let currentCartTotal = undefined;
+  const POS_THRESHOLD_GR = 9900;
+  const UPSELL_HIGH_REMAINING_THRESHOLD = 70.0;
+  const PHOTO_SKUS = [
+    7924, 7930, 7918, 7932, 7926, 7934, 7928, 7936, 7925, 7931, 7933, 7935, 7929,
+    7937, 7927, 7919,
+  ];
 
-        function toInt(value) {
-            const n = typeof value === "number" ? value : parseInt(String(value), 10);
-            return Number.isFinite(n) ? n : undefined;
+  let currentShippingType = null; // "pos" => widoczny
+  let currentCartTotalGr = undefined; // z DOM (grosze)
+  let hasPhotosInCart = false; // z SC_INIT / transactionProducts
+
+  function clamp(n, min, max) {
+    return Math.min(max, Math.max(min, n));
+  }
+
+  function parsePlnToGrosze(text) {
+    if (!text) return undefined;
+    const normalized = String(text)
+      .replace(/\u00A0/g, " ")
+      .replace(/[^\d,.\-]/g, "")
+      .replace(",", ".");
+    const v = parseFloat(normalized);
+    if (Number.isNaN(v)) return undefined;
+    return Math.round(v * 100);
+  }
+
+  function formatGrosze(gr) {
+    const v = (gr / 100).toFixed(2);
+    return v.replace(".", ",");
+  }
+
+  function toSkuNumber(value) {
+    const n = typeof value === "number" ? value : parseInt(String(value), 10);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  function skuValuesFromField(raw) {
+    if (raw == null) return [];
+    if (Array.isArray(raw)) return raw.map(toSkuNumber).filter((x) => typeof x === "number");
+    const n = toSkuNumber(raw);
+    return typeof n === "number" ? [n] : [];
+  }
+
+  function applyTransactionProductsForPhotoFlag(transactionProducts) {
+    if (!Array.isArray(transactionProducts)) return;
+    const skuSet = new Set(PHOTO_SKUS);
+    const skus = [];
+    for (const p of transactionProducts) {
+      if (!p) continue;
+      skus.push(...skuValuesFromField(p.sku ?? p.SKU));
+    }
+    hasPhotosInCart = skus.some((s) => skuSet.has(s));
+  }
+
+  function ensureStyles() {
+    if (document.getElementById("fotouslugi-cross-sell-style")) return;
+    const style = document.createElement("style");
+    style.id = "fotouslugi-cross-sell-style";
+    style.textContent = `
+      .cewe-free-delivery {
+        max-width: 75%;
+        margin: 10px 0 14px auto;
+        padding: 12px 14px;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        background: #fff;
+        font-family: Arial, sans-serif;
+        display: none;
+      }
+      .cewe-free-delivery.is-visible { display:block; }
+      @media (max-width: 767px) {
+        .cewe-free-delivery { max-width:none; margin:10px 12px 14px 12px; }
+      }
+      .cewe-free-delivery__upsell {
+        display:none;
+        align-items:center;
+        gap:8px;
+        padding:8px 10px;
+        background:#fdf2f2;
+        border-radius:6px;
+        margin-bottom:12px;
+        border:1px dashed #d91c1c;
+      }
+      .cewe-free-delivery__upsell.is-active { display:flex; }
+      .cewe-free-delivery__upsell-icon { width:20px;height:20px;flex:0 0 auto;fill:#d91c1c; }
+      .cewe-free-delivery__upsell-text { font-size:13px;color:#d91c1c;line-height:1.3; }
+      .cewe-free-delivery__upsell-link { color:#d91c1c;text-decoration:underline;font-weight:700; }
+      .cewe-free-delivery__title { font-size:13px;color:#222;line-height:1.25; }
+      .cewe-free-delivery__title strong { font-weight:700; }
+      .cewe-free-delivery__track { position:relative;height:12px;background:#eee;border-radius:999px;margin:12px 0; }
+      .cewe-free-delivery__bar { height:100%;width:0%;background:#d91c1c;border-radius:999px;transition:width .35s ease, background-color .35s ease; }
+      .cewe-free-delivery__bar.is-complete { background:#4FBB02; }
+      .cewe-free-delivery__thumb {
+        position:absolute;top:50%;left:0%;
+        transform:translate(-50%, -50%);
+        width:28px;height:28px;
+        display:grid;place-items:center;
+        border-radius:25%;
+        background:#fff;
+        border:2px solid #d91c1c;
+        box-shadow:0 2px 4px rgba(0,0,0,.1);
+        pointer-events:none;
+        transition:left .35s ease, border-color .35s ease;
+        z-index:2;
+      }
+      .cewe-free-delivery__thumb.is-complete { border-color:#4FBB02; }
+      .cewe-free-delivery__truck { width:18px;height:18px;display:flex;align-items:center;justify-content:center; }
+      .cewe-free-delivery__truck svg { width:100%;height:100%;display:block;fill:#d91c1c;transition:fill .35s ease; }
+      .cewe-free-delivery__thumb.is-complete svg { fill:#4FBB02; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function getItemsTableRoot() {
+    return document.querySelector("cw-items-table");
+  }
+
+  function ensureWidget() {
+    ensureStyles();
+    const root = getItemsTableRoot();
+    if (!root) return null;
+    const existing = root.querySelector("[data-it-name='free-delivery-progress-upsell']");
+    if (existing) return existing;
+
+    const widget = document.createElement("div");
+    widget.className = "cewe-free-delivery";
+    widget.setAttribute("data-it-name", "free-delivery-progress-upsell");
+    widget.innerHTML = `
+      <div class="cewe-free-delivery__upsell" data-role="upsell">
+        <svg class="cewe-free-delivery__upsell-icon" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="3.2"/>
+          <path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/>
+        </svg>
+        <div class="cewe-free-delivery__upsell-text" data-role="upsell-text"></div>
+      </div>
+      <div class="cewe-free-delivery__title" data-role="title"></div>
+      <div class="cewe-free-delivery__track" aria-label="Postęp do darmowej dostawy">
+        <div class="cewe-free-delivery__bar" data-role="bar"></div>
+        <div class="cewe-free-delivery__thumb" data-role="thumb" aria-hidden="true">
+          <span class="cewe-free-delivery__truck" aria-hidden="true">
+            <svg viewBox="0 0 297 297">
+              <path d="M242.309,210.424c-14.535,0-26.359,11.84-26.359,26.398c0,14.564,11.824,26.412,26.359,26.412 c14.541,0,26.362-11.848,26.362-26.412C268.671,222.264,256.85,210.424,242.309,210.424z"/>
+              <path d="M64.565,210.424c-14.542,0-26.366,11.84-26.366,26.398c0,14.564,11.824,26.412,26.366,26.412 c14.534,0,26.358-11.848,26.358-26.412C90.924,222.264,79.1,210.424,64.565,210.424z"/>
+              <path d="M257.182,99.523c-1.391-4.191-5.313-7.023-9.732-7.023H234.99v43.828h34.384L257.182,99.523z"/>
+              <path d="M290.21,152.73h-55.22v41.928c2.379-0.408,4.825-0.637,7.318-0.637c22.033,0,40.225,16.77,42.515,38.225h1.93 c5.657,0,10.247-4.59,10.247-10.254v-59.623C297,157.92,294.164,154.152,290.21,152.73z"/>
+              <path d="M218.199,44.02c0-5.664-4.59-10.254-10.248-10.254H10.247C4.59,33.766,0,38.355,0,44.02v177.973 c0,5.664,4.59,10.254,10.247,10.254h11.8c2.291-21.455,20.482-38.225,42.519-38.225c22.029,0,40.217,16.77,42.508,38.225h80.925 h11.8c1.38-12.918,8.521-24.123,18.796-31.008L218.199,44.02z"/>
+            </svg>
+          </span>
+        </div>
+      </div>
+    `;
+
+    root.insertBefore(widget, root.firstChild);
+    return widget;
+  }
+
+  let raf = 0;
+  function scheduleUpdate() {
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      update();
+    });
+  }
+
+  function update() {
+    const widget = ensureWidget();
+    if (!widget) return;
+
+    const shouldBeVisible = currentShippingType === "pos";
+    widget.classList.toggle("is-visible", shouldBeVisible);
+    if (!shouldBeVisible) return;
+
+    const title = widget.querySelector("[data-role='title']");
+    const bar = widget.querySelector("[data-role='bar']");
+    const thumb = widget.querySelector("[data-role='thumb']");
+    const upsell = widget.querySelector("[data-role='upsell']");
+    const upsellText = widget.querySelector("[data-role='upsell-text']");
+
+    const totalGr = currentCartTotalGr;
+    if (typeof totalGr !== "number") {
+      if (title) title.textContent = "Wczytuję kwotę koszyka…";
+      if (bar) bar.style.width = "0%";
+      if (thumb) thumb.style.left = "0%";
+      return;
+    }
+
+    const remainingGr = Math.max(0, POS_THRESHOLD_GR - totalGr);
+    const progress = clamp((totalGr / POS_THRESHOLD_GR) * 100, 0, 100);
+    const isComplete = totalGr >= POS_THRESHOLD_GR;
+
+    if (title) {
+      title.innerHTML = isComplete
+        ? "Gratulacje! Masz <strong>darmowy odbiór w drogerii</strong>."
+        : `Brakuje Ci <strong>${formatGrosze(remainingGr)} zł</strong> do darmowego odbioru w drogerii.`;
+    }
+
+    if (bar) {
+      bar.classList.toggle("is-complete", isComplete);
+      bar.style.width = `${progress}%`;
+    }
+    if (thumb) {
+      thumb.classList.toggle("is-complete", isComplete);
+      thumb.style.left = `${progress}%`;
+    }
+
+    if (upsell) {
+      const shouldUpsellActive = !isComplete && remainingGr > 0;
+      upsell.classList.toggle("is-active", shouldUpsellActive);
+      if (shouldUpsellActive && upsellText) {
+        const remaining = remainingGr / 100;
+        const remainingText = `${formatGrosze(remainingGr)} zł`;
+        if (remaining >= UPSELL_HIGH_REMAINING_THRESHOLD) {
+          upsellText.innerHTML =
+            `Do darmowej dostawy brakuje Ci <strong>${remainingText}</strong>. ` +
+            `Dobierz <a href="https://www.fotouslugi.pl/fotoprezenty/kula-ze-zdjeciem.html" class="cewe-free-delivery__upsell-link">kulę ze zdjęciem</a> ` +
+            `lub <a href="https://www.fotouslugi.pl/zdjecia/zdjecie-w-ramce.html" class="cewe-free-delivery__upsell-link">zdjęcie w ramce</a> ` +
+            `i odbierz zamówienie za darmo w drogerii.`;
+        } else if (hasPhotosInCart) {
+          upsellText.innerHTML =
+            `Do darmowej dostawy brakuje Ci <strong>${remainingText}</strong>. ` +
+            `Dobierz <a href="https://www.fotouslugi.pl/dodatki-do-fotoproduktow.html#dodatki-do-zdjec" class="cewe-free-delivery__upsell-link">dodatki do zdjęć</a> ` +
+            `i odbierz zamówienie za darmo w drogerii.`;
+        } else {
+          upsellText.innerHTML =
+            `Do darmowej dostawy brakuje Ci <strong>${remainingText}</strong>. ` +
+            `Dobierz <a href="https://www.fotouslugi.pl/zdjecia/standard.html" class="cewe-free-delivery__upsell-link">zdjęcia</a> ` +
+            `i odbierz zamówienie za darmo w drogerii.`;
         }
+      }
+    }
+  }
 
-        function calcCartTotalFromTransactionProducts(transactionProducts) {
-            if (!Array.isArray(transactionProducts)) return undefined;
-            console.log("Processing transactionProducts:", transactionProducts);
-            let sumGrosze = 0;
-            for (const p of transactionProducts) {
-                if (!p) continue;
-                const basePrice = toInt(p.basePrice);
-                if (typeof basePrice !== "number") continue;
-                const qty = toInt(p.quantity) ?? 1;
-                const calculatedProductPrice = (basePrice * Math.max(1, qty)) / 100;
-                console.log(`Product: ${p.title || 'Unknown'}, basePrice (grosze): ${basePrice}, quantity: ${qty}, calculated: ${calculatedProductPrice} PLN`);
-                sumGrosze += basePrice * Math.max(1, qty);
-            }
-            const total = sumGrosze / 100;
-            console.log("Total from products (DataLayer):", total);
-            return total;
+  // 1) obserwujemy TYLKO `.total-sum-price`
+  function startTotalObserver() {
+    const selector = ".total-sum-price";
+
+    const attach = (el) => {
+      const read = () => {
+        const raw = el.innerText || el.textContent;
+        const gr = parsePlnToGrosze(raw);
+        if (typeof gr === "number" && gr >= 0) {
+          currentCartTotalGr = gr;
+          scheduleUpdate();
         }
+      };
+      read();
+      const mo = new MutationObserver(read);
+      mo.observe(el, { childList: true, characterData: true, subtree: true });
+    };
 
-        function applyTransactionProducts(transactionProducts) {
-            if (!Array.isArray(transactionProducts)) return;
+    const existing = document.querySelector(selector);
+    if (existing) return attach(existing);
 
-            const total = calcCartTotalFromTransactionProducts(transactionProducts);
-            if (typeof total === "number") currentCartTotal = total;
+    // czekamy aż element się pojawi (max 20s), bez obserwowania body w nieskończoność
+    const startedAt = Date.now();
+    const mo = new MutationObserver(() => {
+      const el = document.querySelector(selector);
+      if (el) {
+        mo.disconnect();
+        attach(el);
+      } else if (Date.now() - startedAt > 20000) {
+        mo.disconnect();
+      }
+    });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  }
 
-            const skus = [];
-            for (const p of transactionProducts) {
-                if (!p) continue;
-                skus.push(...skuValuesFromField(p.sku ?? p.SKU));
-            }
-            const photoSkuSet = new Set(PHOTO_SKUS);
-            hasPhotosInCart = skus.some((s) => photoSkuSet.has(s));
+  // 2) fallback: eventy dla shipping (i ewentualnie photo SKU)
+  function handleTrackingEvent(ev) {
+    const payload = ev?.payLoad ?? ev?.payload ?? {};
+
+    if (ev?.action === "SC_INIT") {
+      if (payload.transactionShipping) currentShippingType = payload.transactionShipping;
+      applyTransactionProductsForPhotoFlag(payload.transactionProducts);
+      setTimeout(scheduleUpdate, 100);
+      return;
+    }
+
+    if (ev?.action === "SC_CHANGE_SHIPPING") {
+      if (payload.transactionShipping) currentShippingType = payload.transactionShipping;
+      // czasem też niesie transactionProducts — wtedy odśwież flagę zdjęć
+      applyTransactionProductsForPhotoFlag(payload.transactionProducts);
+      setTimeout(scheduleUpdate, 50);
+    }
+  }
+
+  function initTracking() {
+    if (Array.isArray(window.ceweDataLayer)) {
+      window.ceweDataLayer.forEach(handleTrackingEvent);
+    }
+    const onTracking = (e) => e?.detail && handleTrackingEvent(e.detail);
+    window.addEventListener("cw_tracking", onTracking);
+    document.addEventListener("cw_tracking", onTracking);
+  }
+
+  initTracking();
+  startTotalObserver();
+  scheduleUpdate();
+})();
+
+!(function () {
+  if (window.__ceweRossmannFreeDeliveryLoggerApplied) return;
+  window.__ceweRossmannFreeDeliveryLoggerApplied = true;
+
+  const THRESHOLD_POS = 99.0;
+  const THRESHOLD_MAIL = 249.0;
+
+  function toInt(v) {
+    const n = typeof v === "number" ? v : parseInt(String(v), 10);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  function calcTotalPln(products) {
+    if (!Array.isArray(products)) return undefined;
+    let grosze = 0;
+    for (const p of products) {
+      if (!p) continue;
+      const base = toInt(p.basePrice);
+      if (typeof base !== "number") continue;
+      const qty = toInt(p.quantity) ?? 1;
+      grosze += base * Math.max(1, qty);
+    }
+    return grosze / 100;
+  }
+
+  function handle(ev) {
+    const payload = ev?.payLoad ?? ev?.payload ?? {};
+    const shipping = payload.transactionShipping; // "pos" / "mail" itp.
+    const threshold = shipping === "pos" ? THRESHOLD_POS : THRESHOLD_MAIL;
+    const total = calcTotalPln(payload.transactionProducts);
+    if (typeof total !== "number") return;
+
+    const remaining = Math.max(0, threshold - total);
+    console.log(
+      "[rossmann free delivery]",
+      "action=",
+      ev?.action,
+      "shipping=",
+      shipping,
+      "total=",
+      total,
+      "threshold=",
+      threshold,
+      "remaining=",
+      remaining
+    );
+  }
+
+  // historyczne eventy
+  if (Array.isArray(window.ceweDataLayer)) {
+    window.ceweDataLayer.forEach(handle);
+  }
+
+  // live eventy
+  const onTracking = (e) => e?.detail && handle(e.detail);
+  window.addEventListener("cw_tracking", onTracking);
+  document.addEventListener("cw_tracking", onTracking);
+})();
+
+!(function () {
+  if (window.__fotoUslugiCrossSellApplied) return;
+  window.__fotoUslugiCrossSellApplied = true;
+
+  const POS_THRESHOLD = 99.0;
+  const UPSELL_HIGH_REMAINING_THRESHOLD = 70.0;
+  const PHOTO_SKUS = [
+    7924, 7930, 7918, 7932, 7926, 7934, 7928, 7936, 7925, 7931, 7933, 7935, 7929,
+    7937, 7927, 7919,
+  ];
+  let currentShippingType = null;
+  let hasPhotosInCart = false;
+  let currentCartTotal = undefined;
+
+  function toInt(value) {
+    const n = typeof value === "number" ? value : parseInt(String(value), 10);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  function calcCartTotalFromTransactionProducts(transactionProducts) {
+    if (!Array.isArray(transactionProducts)) return undefined;
+    let sumGrosze = 0;
+    for (const p of transactionProducts) {
+      if (!p) continue;
+      const basePrice = toInt(p.basePrice);
+      if (typeof basePrice !== "number") continue;
+      const qty = toInt(p.quantity) ?? 1;
+      sumGrosze += basePrice * Math.max(1, qty);
+    }
+    return sumGrosze / 100;
+  }
+
+  function applyTransactionProducts(transactionProducts) {
+    if (!Array.isArray(transactionProducts)) return;
+
+    const total = calcCartTotalFromTransactionProducts(transactionProducts);
+    if (typeof total === "number") currentCartTotal = total;
+
+    const skus = [];
+    for (const p of transactionProducts) {
+      if (!p) continue;
+      skus.push(...skuValuesFromField(p.sku ?? p.SKU));
+    }
+    const photoSkuSet = new Set(PHOTO_SKUS);
+    hasPhotosInCart = skus.some((s) => photoSkuSet.has(s));
+  }
+
+  function toSkuNumber(value) {
+    const n = typeof value === "number" ? value : parseInt(String(value), 10);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  /** `sku` w danych może być liczbą albo tablicą (np. [7918]) — bierzemy wszystkie wartości liczbowe. */
+  function skuValuesFromField(raw) {
+    if (raw == null) return [];
+    if (Array.isArray(raw)) {
+      const out = [];
+      for (const x of raw) {
+        const n = toSkuNumber(x);
+        if (typeof n === "number") out.push(n);
+      }
+      return out;
+    }
+    const n = toSkuNumber(raw);
+    return typeof n === "number" ? [n] : [];
+  }
+
+  let rafId = null;
+  function scheduleUpdate() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      update();
+      rafId = null;
+    });
+  }
+
+  function isShoppingCartView() {
+    // checkout SPA używa hash routingu: /checkout.html#/shoppingcart
+    const h = String(window.location?.hash || "");
+    return h.includes("shoppingcart");
+  }
+
+  function handleDataLayerEvent(event) {
+    const payload = event?.payLoad ?? event?.payload ?? {};
+
+    if (Array.isArray(payload.transactionProducts)) {
+      applyTransactionProducts(payload.transactionProducts);
+      scheduleUpdate();
+    }
+
+    if (event.action === "SC_INIT") {
+      const shipping = payload.transactionShipping;
+      if (shipping) currentShippingType = shipping;
+      // Jak w FR: po SC_INIT dajemy SPA ~100ms na render i dopiero aktualizujemy UI.
+      setTimeout(scheduleUpdate, 100);
+      // Przy okazji spróbuj podpiąć mini‑pasek pod ilość (gdy koszyk już wyrenderowany)
+      setTimeout(initQtyMiniBars, 150);
+      return;
+    }
+
+    if (event.action === "SC_CHANGE_QUANTITY" || event.action === "SC_DELETE_ITEMS") {
+      scheduleUpdate();
+      return;
+    }
+
+    if (event.action === "SC_CHANGE_SHIPPING") {
+      const shipping = payload.transactionShipping;
+      if (shipping) {
+        currentShippingType = shipping;
+      }
+      scheduleUpdate();
+    }
+  }
+
+  function initDataLayer() {
+    const handle = (event) => {
+      if (event && (event.action || event.payLoad)) {
+        handleDataLayerEvent(event);
+      }
+    };
+
+    if (Array.isArray(window.ceweDataLayer)) {
+      window.ceweDataLayer.forEach(handle);
+    }
+
+    const originalPush = window.ceweDataLayer?.push;
+    if (typeof originalPush === "function") {
+      window.ceweDataLayer.push = function (...args) {
+        args.forEach(handle);
+        return originalPush.apply(this, args);
+      };
+    }
+
+    const onTracking = (e) => {
+      if (e.detail) handle(e.detail);
+    };
+
+    window.addEventListener("cw_tracking", onTracking);
+    document.addEventListener("cw_tracking", onTracking);
+  }
+
+  function startTotalSumObserver() {
+    const selector = ".total-sum-price";
+
+    const attach = (el) => {
+      const read = () => {
+        const raw = el.innerText || el.textContent;
+        const v = parsePlnFromText(raw);
+        if (typeof v === "number" && v > 0) {
+          currentCartTotal = v;
+          scheduleUpdate();
         }
+      };
 
-        function toSkuNumber(value) {
-            const n = typeof value === "number" ? value : parseInt(String(value), 10);
-            return Number.isFinite(n) ? n : undefined;
+      read();
+      // Obserwujemy zmiany w samym elemencie ceny
+      const mo = new MutationObserver(read);
+      mo.observe(el, { characterData: true, childList: true, subtree: true });
+    };
+
+    // Szukamy elementu regularnie, dopóki go nie znajdziemy
+    const findElement = () => {
+      const el = document.querySelector(selector);
+      if (el) {
+        attach(el);
+        return true;
+      }
+      return false;
+    };
+
+    if (!findElement()) {
+      const mo = new MutationObserver(() => {
+        if (findElement()) {
+          mo.disconnect();
         }
+      });
+      mo.observe(document.body, { childList: true, subtree: true });
+    }
+  }
 
-        /** `sku` w danych może być liczbą albo tablicą (np. [7918]) — bierzemy wszystkie wartości liczbowe. */
-        function skuValuesFromField(raw) {
-            if (raw == null) return [];
-            if (Array.isArray(raw)) {
-                const out = [];
-                for (const x of raw) {
-                    const n = toSkuNumber(x);
-                    if (typeof n === "number") out.push(n);
-                }
-                return out;
-            }
-            const n = toSkuNumber(raw);
-            return typeof n === "number" ? [n] : [];
-        }
+  function clamp(n, min, max) {
+    return Math.min(max, Math.max(min, n));
+  }
 
-        function extractSkusFromTransactionProducts(payload) {
-            const products = payload?.transactionProducts;
-            if (!Array.isArray(products)) return [];
-            const skus = [];
-            for (const p of products) {
-                if (!p) continue;
-                skus.push(...skuValuesFromField(p.sku ?? p.SKU));
-            }
-            return skus;
-        }
+  function parsePlnFromText(text) {
+    if (!text) return undefined;
+    // Usuwamy spacje (w tym &nbsp; / \u00A0), waluty i inne znaki niebędące cyframi, przecinkiem lub kropką
+    const normalized = String(text)
+      .replace(/\s/g, "")
+      .replace(/\u00A0/g, "")
+      .replace(/[^\d,.\-]/g, "")
+      .replace(",", ".");
 
-        let rafId = null;
-        function scheduleUpdate() {
-            if (rafId) return;
-            rafId = requestAnimationFrame(() => {
-                update();
-                rafId = null;
-            });
-        }
+    const v = parseFloat(normalized);
+    return Number.isNaN(v) ? undefined : v;
+  }
 
-        function handleDataLayerEvent(event) {
-            const payload = event?.payLoad ?? event?.payload ?? {};
+  function formatPln(value) {
+    try {
+      return new Intl.NumberFormat("pl-PL", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value);
+    } catch {
+      return value.toFixed(2).replace(".", ",");
+    }
+  }
 
-            if (Array.isArray(payload.transactionProducts)) {
-                applyTransactionProducts(payload.transactionProducts);
-                scheduleUpdate();
-            }
+  function getCartTotal() {
+    const el = document.querySelector(".total-sum-price");
+    const raw = el?.innerText || el?.textContent;
+    const fromDom = parsePlnFromText(raw);
 
-            if (event.action === "SC_INIT") {
-                const shipping = payload.transactionShipping;
-                if (shipping) currentShippingType = shipping;
-                scheduleUpdate();
-                return;
-            }
+    if (typeof fromDom === "number" && fromDom > 0) {
+      return fromDom;
+    }
 
-            if (event.action === "SC_CHANGE_QUANTITY" || event.action === "SC_DELETE_ITEMS") {
-                scheduleUpdate();
-                return;
-            }
+    return currentCartTotal;
+  }
 
-            if (event.action === "SC_CHANGE_SHIPPING") {
-                const shipping = payload.transactionShipping;
-                if (shipping) {
-                    currentShippingType = shipping;
-                }
-                scheduleUpdate();
-            }
-        }
-
-        function initDataLayer() {
-            const handle = (event) => {
-                if (event && (event.action || event.payLoad)) {
-                    handleDataLayerEvent(event);
-                }
-            };
-
-            if (Array.isArray(window.ceweDataLayer)) {
-                window.ceweDataLayer.forEach(handle);
-            }
-
-            const originalPush = window.ceweDataLayer?.push;
-            if (typeof originalPush === "function") {
-                window.ceweDataLayer.push = function (...args) {
-                    args.forEach(handle);
-                    return originalPush.apply(this, args);
-                };
-            }
-
-            const onTracking = (e) => {
-                if (e.detail) handle(e.detail);
-            };
-
-            window.addEventListener("cw_tracking", onTracking);
-            document.addEventListener("cw_tracking", onTracking);
-        }
-
-        function startTotalSumObserver() {
-            const selector = ".total-sum-price";
-
-            const attach = (el) => {
-                const read = () => {
-                    const raw = el.innerText || el.textContent;
-                    const v = parsePlnFromText(raw);
-                    console.log("DOM total raw text:", raw, "parsed value:", v);
-                    if (typeof v === "number" && v > 0) {
-                        currentCartTotal = v;
-                        scheduleUpdate();
-                    }
-                };
-
-                read();
-                // Obserwujemy zmiany w samym elemencie ceny
-                const mo = new MutationObserver(read);
-                mo.observe(el, { characterData: true, childList: true, subtree: true });
-            };
-
-            // Szukamy elementu regularnie, dopóki go nie znajdziemy
-            const findElement = () => {
-                const el = document.querySelector(selector);
-                if (el) {
-                    attach(el);
-                    return true;
-                }
-                return false;
-            };
-
-            if (!findElement()) {
-                const mo = new MutationObserver(() => {
-                    if (findElement()) {
-                        mo.disconnect();
-                    }
-                });
-                mo.observe(document.body, { childList: true, subtree: true });
-            }
-        }
-
-        function startBootstrapRetry() {
-            const startedAt = Date.now();
-            const iv = setInterval(() => {
-                scheduleUpdate();
-
-                const widgetExists = !!document.querySelector(
-                    "[data-it-name='free-delivery-progress-upsell']"
-                );
-                const hasTotal = typeof currentCartTotal === "number";
-                const hasShipping = typeof currentShippingType === "string";
-
-                if (widgetExists && hasShipping && hasTotal) {
-                    clearInterval(iv);
-                    return;
-                }
-                if (Date.now() - startedAt > 20000) {
-                    clearInterval(iv);
-                }
-            }, 250);
-        }
-
-        function clamp(n, min, max) {
-            return Math.min(max, Math.max(min, n));
-        }
-
-        function parsePlnFromText(text) {
-            if (!text) return undefined;
-            // Usuwamy spacje (w tym &nbsp; / \u00A0), waluty i inne znaki niebędące cyframi, przecinkiem lub kropką
-            const normalized = String(text)
-                .replace(/\s/g, "")
-                .replace(/\u00A0/g, "")
-                .replace(/[^\d,.\-]/g, "")
-                .replace(",", ".");
-
-            const v = parseFloat(normalized);
-            return Number.isNaN(v) ? undefined : v;
-        }
-
-        function formatPln(value) {
-            try {
-                return new Intl.NumberFormat("pl-PL", {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                }).format(value);
-            } catch {
-                return value.toFixed(2).replace(".", ",");
-            }
-        }
-
-        function getCartTotal() {
-            const el = document.querySelector(".total-sum-price");
-            const raw = el?.innerText || el?.textContent;
-            const fromDom = parsePlnFromText(raw);
-
-            if (typeof fromDom === "number" && fromDom > 0) {
-                return fromDom;
-            }
-
-            return currentCartTotal;
-        }
-
-        function ensureStyles() {
-            if (document.getElementById("fotouslugi-cross-sell-style")) return;
-            const style = document.createElement("style");
-            style.id = "fotouslugi-cross-sell-style";
-            style.textContent = `
+  function ensureStyles() {
+    if (document.getElementById("fotouslugi-cross-sell-style")) return;
+    const style = document.createElement("style");
+    style.id = "fotouslugi-cross-sell-style";
+    style.textContent = `
       .cewe-free-delivery {
         max-width: 75%;
         margin: 10px 0 14px auto;
@@ -369,25 +705,25 @@
         fill: #4FBB02;
       }
     `;
-            document.head.appendChild(style);
-        }
+    document.head.appendChild(style);
+  }
 
-        function getItemsTableRoot() {
-            return document.querySelector("cw-items-table");
-        }
+  function getItemsTableRoot() {
+    return document.querySelector("cw-items-table");
+  }
 
-        function ensureWidget() {
-            ensureStyles();
-            const root = getItemsTableRoot();
-            if (!root) return null;
+  function ensureWidget() {
+    ensureStyles();
+    const root = getItemsTableRoot();
+    if (!root) return null;
 
-            const existing = root.querySelector("[data-it-name='free-delivery-progress-upsell']");
-            if (existing) return existing;
+    const existing = root.querySelector("[data-it-name='free-delivery-progress-upsell']");
+    if (existing) return existing;
 
-            const widget = document.createElement("div");
-            widget.className = "cewe-free-delivery";
-            widget.setAttribute("data-it-name", "free-delivery-progress-upsell");
-            widget.innerHTML = `
+    const widget = document.createElement("div");
+    widget.className = "cewe-free-delivery";
+    widget.setAttribute("data-it-name", "free-delivery-progress-upsell");
+    widget.innerHTML = `
       <div class="cewe-free-delivery__upsell" data-role="upsell">
         <svg class="cewe-free-delivery__upsell-icon" viewBox="0 0 24 24">
           <circle cx="12" cy="12" r="3.2"/>
@@ -414,99 +750,94 @@
       </div>
     `;
 
-            const items = root.querySelector(".items");
-            if (items && items.parentElement === root) {
-                root.insertBefore(widget, items);
-            } else {
-                root.insertBefore(widget, root.firstChild);
-            }
+    const items = root.querySelector(".items");
+    if (items && items.parentElement === root) {
+      root.insertBefore(widget, items);
+    } else {
+      root.insertBefore(widget, root.firstChild);
+    }
 
-            return widget;
-        }
+    return widget;
+  }
 
-        function update() {
-            const widget = ensureWidget();
-            if (!widget) return;
+  function update() {
+    const widget = ensureWidget();
+    if (!widget) return;
 
-            const total = getCartTotal();
-            const shipping = currentShippingType;
+    const total = getCartTotal();
+    const shipping = currentShippingType;
 
-            // Show only for POS
-            const shouldBeVisible = shipping === "pos";
-            if (widget.classList.contains("is-visible") !== shouldBeVisible) {
-                widget.classList.toggle("is-visible", shouldBeVisible);
-            }
+    // Show only for POS
+    const shouldBeVisible = shipping === "pos";
+    if (widget.classList.contains("is-visible") !== shouldBeVisible) {
+      widget.classList.toggle("is-visible", shouldBeVisible);
+    }
 
-            if (!shouldBeVisible) return;
+    if (!shouldBeVisible) return;
 
-            const title = widget.querySelector("[data-role='title']");
-            const bar = widget.querySelector("[data-role='bar']");
-            const thumb = widget.querySelector("[data-role='thumb']");
-            const upsell = widget.querySelector("[data-role='upsell']");
-            const upsellText = widget.querySelector("[data-role='upsell-text']");
+    const title = widget.querySelector("[data-role='title']");
+    const bar = widget.querySelector("[data-role='bar']");
+    const thumb = widget.querySelector("[data-role='thumb']");
+    const upsell = widget.querySelector("[data-role='upsell']");
+    const upsellText = widget.querySelector("[data-role='upsell-text']");
 
-            if (typeof total !== "number") {
-                const loadingText = `Wczytuję kwotę koszyka…`;
-                if (title && title.innerHTML !== loadingText) {
-                    console.log("Setting loading text");
-                    title.innerHTML = loadingText;
-                }
-                if (bar && bar.style.width !== "0%") bar.style.width = "0%";
-                if (thumb && thumb.style.left !== "0%") thumb.style.left = "0%";
-                return;
-            }
+    if (typeof total !== "number") {
+      const loadingText = `Wczytuję kwotę koszyka…`;
+      if (title && title.innerHTML !== loadingText) {
+        title.innerHTML = loadingText;
+      }
+      if (bar && bar.style.width !== "0%") bar.style.width = "0%";
+      if (thumb && thumb.style.left !== "0%") thumb.style.left = "0%";
+      return;
+    }
 
-            const remaining = Math.max(0, POS_THRESHOLD - total);
-            const progressPercent = clamp((total / POS_THRESHOLD) * 100, 0, 100);
-            const isComplete = total >= POS_THRESHOLD;
+    const remaining = Math.max(0, POS_THRESHOLD - total);
+    const progressPercent = clamp((total / POS_THRESHOLD) * 100, 0, 100);
+    const isComplete = total >= POS_THRESHOLD;
 
-            console.log("update() - total:", total, "remaining:", remaining, "isComplete:", isComplete);
+    let newTitleHtml = "";
+    if (isComplete) {
+      newTitleHtml = `Gratulacje! Masz <strong>darmowy odbiór w drogerii</strong>.`;
+    } else {
+      const remainingText = `${formatPln(remaining)} zł`;
+      newTitleHtml = `Brakuje Ci <strong>${remainingText}</strong> do darmowego odbioru w drogerii.`;
+    }
 
-            let newTitleHtml = "";
-            if (isComplete) {
-                newTitleHtml = `Gratulacje! Masz <strong>darmowy odbiór w drogerii</strong>.`;
-            } else {
-                const remainingText = `${formatPln(remaining)} zł`;
-                console.log("Formatted remainingText:", remainingText);
-                newTitleHtml = `Brakuje Ci <strong>${remainingText}</strong> do darmowego odbioru w drogerii.`;
-            }
+    if (title) {
+      // Porównujemy tekst, aby uniknąć migania, ale jeśli jest pusty lub różny - aktualizujemy
+      const currentHtml = title.innerHTML.replace(/&nbsp;/g, " ");
+      const normalizedNewHtml = newTitleHtml.replace(/&nbsp;/g, " ");
 
-            if (title) {
-                // Porównujemy tekst, aby uniknąć migania, ale jeśli jest pusty lub różny - aktualizujemy
-                const currentHtml = title.innerHTML.replace(/&nbsp;/g, " ");
-                const normalizedNewHtml = newTitleHtml.replace(/&nbsp;/g, " ");
+      if (currentHtml !== normalizedNewHtml || title.textContent.trim() === "") {
+        title.innerHTML = newTitleHtml;
+      }
+    }
 
-                if (currentHtml !== normalizedNewHtml || title.textContent.trim() === "") {
-                    console.log("Updating title to:", newTitleHtml);
-                    title.innerHTML = newTitleHtml;
-                }
-            }
+    if (bar) {
+      const barComplete = bar.classList.contains("is-complete");
+      if (barComplete !== isComplete) bar.classList.toggle("is-complete", isComplete);
+      const newWidth = `${progressPercent}%`;
+      if (bar.style.width !== newWidth) bar.style.width = newWidth;
+    }
 
-            if (bar) {
-                const barComplete = bar.classList.contains("is-complete");
-                if (barComplete !== isComplete) bar.classList.toggle("is-complete", isComplete);
-                const newWidth = `${progressPercent}%`;
-                if (bar.style.width !== newWidth) bar.style.width = newWidth;
-            }
+    if (thumb) {
+      const thumbComplete = thumb.classList.contains("is-complete");
+      if (thumbComplete !== isComplete) thumb.classList.toggle("is-complete", isComplete);
+      const newLeft = `${progressPercent}%`;
+      if (thumb.style.left !== newLeft) thumb.style.left = newLeft;
+    }
 
-            if (thumb) {
-                const thumbComplete = thumb.classList.contains("is-complete");
-                if (thumbComplete !== isComplete) thumb.classList.toggle("is-complete", isComplete);
-                const newLeft = `${progressPercent}%`;
-                if (thumb.style.left !== newLeft) thumb.style.left = newLeft;
-            }
+    if (upsell) {
+      const shouldUpsellActive = !isComplete && remaining > 0;
+      if (upsell.classList.contains("is-active") !== shouldUpsellActive) {
+        upsell.classList.toggle("is-active", shouldUpsellActive);
+      }
 
-            if (upsell) {
-                const shouldUpsellActive = !isComplete && remaining > 0;
-                if (upsell.classList.contains("is-active") !== shouldUpsellActive) {
-                    upsell.classList.toggle("is-active", shouldUpsellActive);
-                }
-
-                if (shouldUpsellActive && upsellText) {
-                    let newUpsellHtml = "";
-                    const remainingText = `${formatPln(remaining)}&nbsp;zł`;
-                    if (remaining >= UPSELL_HIGH_REMAINING_THRESHOLD) {
-                        newUpsellHtml = `
+      if (shouldUpsellActive && upsellText) {
+        let newUpsellHtml = "";
+        const remainingText = `${formatPln(remaining)}&nbsp;zł`;
+        if (remaining >= UPSELL_HIGH_REMAINING_THRESHOLD) {
+          newUpsellHtml = `
               Do darmowej dostawy brakuje Ci <strong>${remainingText}</strong>.
               Dobierz
               <a href="https://www.fotouslugi.pl/fotoprezenty/kula-ze-zdjeciem.html" class="cewe-free-delivery__upsell-link">kulę ze zdjęciem</a>
@@ -514,53 +845,738 @@
               <a href="https://www.fotouslugi.pl/zdjecia/zdjecie-w-ramce.html" class="cewe-free-delivery__upsell-link">zdjęcie w ramce</a>
               i odbierz zamówienie za darmo w drogerii.
             `;
-                    } else {
-                        if (hasPhotosInCart) {
-                            newUpsellHtml = `
+        } else {
+          if (hasPhotosInCart) {
+            newUpsellHtml = `
                 Do darmowej dostawy brakuje Ci <strong>${remainingText}</strong>.
                 Dobierz
                 <a href="https://www.fotouslugi.pl/dodatki-do-fotoproduktow.html#dodatki-do-zdjec" class="cewe-free-delivery__upsell-link">dodatki do zdjęć</a>
                 i odbierz zamówienie za darmo w drogerii.
               `;
-                        } else {
-                            newUpsellHtml =
-                                `Do darmowej dostawy brakuje Ci <strong>${remainingText}</strong>. ` +
-                                `Dobierz <a href="https://www.fotouslugi.pl/zdjecia/standard.html" class="cewe-free-delivery__upsell-link">zdjęcia</a> ` +
-                                `i odbierz zamówienie za darmo w drogerii.`;
-                        }
-                    }
-                    if (upsellText.innerHTML !== newUpsellHtml) {
-                        upsellText.innerHTML = newUpsellHtml;
-                    }
-                }
-            }
+          } else {
+            newUpsellHtml =
+              `Do darmowej dostawy brakuje Ci <strong>${remainingText}</strong>. ` +
+              `Dobierz <a href="https://www.fotouslugi.pl/zdjecia/standard.html" class="cewe-free-delivery__upsell-link">zdjęcia</a> ` +
+              `i odbierz zamówienie za darmo w drogerii.`;
+          }
         }
-
-        const observer = new MutationObserver((mutations) => {
-            const isOwnMutation = mutations.every(m => {
-                const target = m.target;
-                return target.closest && target.closest("[data-it-name='free-delivery-progress-upsell']");
-            });
-            if (!isOwnMutation) {
-                scheduleUpdate();
-            }
-        });
-
-        function startObserving() {
-            const target = document.body;
-            observer.observe(target, { childList: true, characterData: true, subtree: true });
+        if (upsellText.innerHTML !== newUpsellHtml) {
+          upsellText.innerHTML = newUpsellHtml;
         }
+      }
+    }
+  }
 
-        initDataLayer();
+  // Lekki observer tylko na wypadek re-renderu; bez interwałów.
+  const observer = new MutationObserver((mutations) => {
+    const isOwnMutation = mutations.every((m) => {
+      const target = m.target;
+      return (
+        target.closest &&
+        target.closest("[data-it-name='free-delivery-progress-upsell']")
+      );
+    });
+    if (!isOwnMutation) {
+      scheduleUpdate();
+    }
+  });
+
+  function startObserving() {
+    const target = document.body;
+    if (!target) return;
+    observer.observe(target, { childList: true, characterData: true, subtree: true });
+  }
+
+  initDataLayer();
+  startTotalSumObserver();
+  startObserving();
+  scheduleUpdate();
+})();
+
+!(function () {
+  if (window.__fotoUslugiCrossSellApplied) return;
+  window.__fotoUslugiCrossSellApplied = true;
+
+  function ensureQaMarker() {
+    const id = "cewe-upsell-qa-marker";
+    if (document.getElementById(id)) return;
+    const el = document.createElement("div");
+    el.id = id;
+    el.style.cssText =
+      "position:fixed;z-index:2147483647;left:8px;bottom:8px;" +
+      "background:#111;color:#fff;padding:6px 8px;border-radius:6px;" +
+      "font:12px/1.2 Arial, sans-serif;opacity:.9;pointer-events:none;";
+    // Bez cyfr i bez &nbsp; — czysty textContent do testu, czy kod w ogóle działa.
+    el.textContent = "CEWE upsell marker: dwa jeden trzy siedem";
+    // body może nie istnieć w momencie wstrzyknięcia do <head>
+    (document.body || document.documentElement).appendChild(el);
+  }
+
+  const POS_THRESHOLD = 99.0;
+  const UPSELL_HIGH_REMAINING_THRESHOLD = 70.0;
+  const PHOTO_SKUS = [
+    7924, 7930, 7918, 7932, 7926, 7934, 7928, 7936, 7925, 7931, 7933, 7935, 7929,
+    7937, 7927, 7919,
+  ];
+  let currentShippingType = null;
+  let hasPhotosInCart = false;
+  let currentCartTotal = undefined;
+
+  function toInt(value) {
+    const n = typeof value === "number" ? value : parseInt(String(value), 10);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  function calcCartTotalFromTransactionProducts(transactionProducts) {
+    if (!Array.isArray(transactionProducts)) return undefined;
+    let sumGrosze = 0;
+    for (const p of transactionProducts) {
+      if (!p) continue;
+      const basePrice = toInt(p.basePrice);
+      if (typeof basePrice !== "number") continue;
+      const qty = toInt(p.quantity) ?? 1;
+      sumGrosze += basePrice * Math.max(1, qty);
+    }
+    return sumGrosze / 100;
+  }
+
+  function applyTransactionProducts(transactionProducts) {
+    if (!Array.isArray(transactionProducts)) return;
+
+    const total = calcCartTotalFromTransactionProducts(transactionProducts);
+    if (typeof total === "number") currentCartTotal = total;
+
+    const skus = [];
+    for (const p of transactionProducts) {
+      if (!p) continue;
+      skus.push(...skuValuesFromField(p.sku ?? p.SKU));
+    }
+    const photoSkuSet = new Set(PHOTO_SKUS);
+    hasPhotosInCart = skus.some((s) => photoSkuSet.has(s));
+  }
+
+  function toSkuNumber(value) {
+    const n = typeof value === "number" ? value : parseInt(String(value), 10);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  /** `sku` w danych może być liczbą albo tablicą (np. [7918]) — bierzemy wszystkie wartości liczbowe. */
+  function skuValuesFromField(raw) {
+    if (raw == null) return [];
+    if (Array.isArray(raw)) {
+      const out = [];
+      for (const x of raw) {
+        const n = toSkuNumber(x);
+        if (typeof n === "number") out.push(n);
+      }
+      return out;
+    }
+    const n = toSkuNumber(raw);
+    return typeof n === "number" ? [n] : [];
+  }
+
+  function extractSkusFromTransactionProducts(payload) {
+    const products = payload?.transactionProducts;
+    if (!Array.isArray(products)) return [];
+    const skus = [];
+    for (const p of products) {
+      if (!p) continue;
+      skus.push(...skuValuesFromField(p.sku ?? p.SKU));
+    }
+    return skus;
+  }
+
+  let rafId = null;
+  function scheduleUpdate() {
+    if (rafId) return;
+    rafId = requestAnimationFrame(() => {
+      update();
+      rafId = null;
+    });
+  }
+
+  function handleDataLayerEvent(event) {
+    const payload = event?.payLoad ?? event?.payload ?? {};
+
+    if (Array.isArray(payload.transactionProducts)) {
+      applyTransactionProducts(payload.transactionProducts);
+      scheduleUpdate();
+    }
+
+    if (event.action === "SC_INIT") {
+      const shipping = payload.transactionShipping;
+      if (shipping) currentShippingType = shipping;
+      scheduleUpdate();
+      return;
+    }
+
+    if (event.action === "SC_CHANGE_QUANTITY" || event.action === "SC_DELETE_ITEMS") {
+      scheduleUpdate();
+      return;
+    }
+
+    if (event.action === "SC_CHANGE_SHIPPING") {
+      const shipping = payload.transactionShipping;
+      if (shipping) {
+        currentShippingType = shipping;
+      }
+      scheduleUpdate();
+    }
+  }
+
+  function initDataLayer() {
+    const handle = (event) => {
+      if (event && (event.action || event.payLoad)) {
+        handleDataLayerEvent(event);
+      }
+    };
+
+    if (Array.isArray(window.ceweDataLayer)) {
+      window.ceweDataLayer.forEach(handle);
+    }
+
+    const originalPush = window.ceweDataLayer?.push;
+    if (typeof originalPush === "function") {
+      window.ceweDataLayer.push = function (...args) {
+        args.forEach(handle);
+        return originalPush.apply(this, args);
+      };
+    }
+
+    const onTracking = (e) => {
+      if (e.detail) handle(e.detail);
+    };
+
+    window.addEventListener("cw_tracking", onTracking);
+    document.addEventListener("cw_tracking", onTracking);
+  }
+
+  // --- Mini pasek pod ilością (jak FR) ---
+  function ensureQtyMiniStyles() {
+    if (document.getElementById("cewe-qty-mini-style")) return;
+    const style = document.createElement("style");
+    style.id = "cewe-qty-mini-style";
+    style.textContent = `
+      .cewe-qty-mini {
+        margin: 6px 0 14px 0;
+        padding: 10px 12px;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        background: #fff;
+        font-family: Arial, sans-serif;
+        font-size: 13px;
+        display: none;
+      }
+      .cewe-qty-mini.is-visible { display:block; }
+      .cewe-qty-mini__text { color:#222; line-height:1.25; margin-bottom:8px; }
+      .cewe-qty-mini__text strong { font-weight:700; }
+      .cewe-qty-mini__track { height:6px; background:#eee; border-radius:999px; overflow:hidden; }
+      .cewe-qty-mini__bar { height:100%; width:0%; background:#d91c1c; transition: width .25s ease; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function ensureQtyMini(container, key) {
+    ensureQtyMiniStyles();
+    const id = `cewe-qty-mini-${key}`;
+    const existing = document.getElementById(id);
+    if (existing) return existing;
+    const el = document.createElement("div");
+    el.id = id;
+    el.className = "cewe-qty-mini";
+    el.innerHTML = `
+      <div class="cewe-qty-mini__text" data-role="text"></div>
+      <div class="cewe-qty-mini__track"><div class="cewe-qty-mini__bar" data-role="bar"></div></div>
+    `;
+    container.parentNode.insertBefore(el, container.nextSibling);
+    return el;
+  }
+
+  function updateQtyMini(mini, qty) {
+    const q = Math.max(1, qty || 1);
+    const text = mini.querySelector("[data-role='text']");
+    const bar = mini.querySelector("[data-role='bar']");
+    const pct = clamp((q / 5) * 100, 0, 100); // 1..5 => 20..100
+    if (text) text.innerHTML = `Ilość w koszyku: <strong>${q}</strong>`;
+    if (bar) bar.style.width = `${pct}%`;
+  }
+
+  function initQtyMiniBars() {
+    if (!isShoppingCartView()) return;
+
+    const containers = document.querySelectorAll("cw-number-container.quantity-container");
+    if (!containers.length) return;
+
+    containers.forEach((container, idx) => {
+      const input = container.querySelector("input[type='number']");
+      if (!input) return;
+      if (input.dataset.ceweQtyMiniBound === "1") return;
+      input.dataset.ceweQtyMiniBound = "1";
+
+      const mini = ensureQtyMini(container, idx);
+      const plusBtn = container.querySelector(".csc-input-icon-right");
+      const minusBtn = container.querySelector(".csc-input-icon-left");
+
+      const readQty = () => parseInt(input.value || "1", 10) || 1;
+      const update = () => updateQtyMini(mini, readQty());
+      const show = () => mini.classList.add("is-visible");
+
+      // "po kliknięciu w ilość": pokaż dopiero po interakcji z kontrolką ilości
+      container.addEventListener("click", () => {
+        show();
+        setTimeout(update, 0);
+      });
+      input.addEventListener("focus", () => {
+        show();
+        setTimeout(update, 0);
+      });
+
+      update();
+      input.addEventListener("input", update);
+      plusBtn?.addEventListener("click", () => setTimeout(update, 100));
+      minusBtn?.addEventListener("click", () => setTimeout(update, 100));
+    });
+  }
+
+  // --- Total sum observer: pozwól ponownie podepinać się po podmianie view ---
+  let totalSumEl = null;
+  let totalSumMo = null;
+  function startTotalSumObserver() {
+    const selector = ".total-sum-price";
+
+    const attach = (el) => {
+      if (totalSumMo) {
+        try {
+          totalSumMo.disconnect();
+        } catch {}
+      }
+      totalSumEl = el;
+      const read = () => {
+        const raw = el.innerText || el.textContent;
+        const v = parsePlnFromText(raw);
+        if (typeof v === "number" && v > 0) {
+          currentCartTotal = v;
+          scheduleUpdate();
+        }
+      };
+
+      read();
+      // Obserwujemy zmiany w samym elemencie ceny
+      totalSumMo = new MutationObserver(read);
+      totalSumMo.observe(el, { characterData: true, childList: true, subtree: true });
+    };
+
+    // FR-owo: krótki retry (max 2s), bez obserwacji całego DOM.
+    const startedAt = Date.now();
+    const tryFind = () => {
+      const el = document.querySelector(selector);
+      if (el) {
+        if (el !== totalSumEl) {
+        attach(el);
+        }
+        return;
+      }
+      if (Date.now() - startedAt >= 2000) return;
+      setTimeout(tryFind, 100);
+    };
+    tryFind();
+  }
+
+  function startFrBootstrap() {
+    // Minimalny bootstrap, żeby w Target/QA złapać moment po renderze:
+    // - 100ms po starcie
+    // - potem retry co 250ms maksymalnie ~2s
+    setTimeout(scheduleUpdate, 100);
+    const startedAt = Date.now();
+    const tick = () => {
+      scheduleUpdate();
+      if (Date.now() - startedAt >= 2000) return;
+      setTimeout(tick, 250);
+    };
+    tick();
+  }
+
+  function clamp(n, min, max) {
+    return Math.min(max, Math.max(min, n));
+  }
+
+  function parsePlnFromText(text) {
+    if (!text) return undefined;
+    // Usuwamy spacje (w tym &nbsp; / \u00A0), waluty i inne znaki niebędące cyframi, przecinkiem lub kropką
+    const normalized = String(text)
+      .replace(/\s/g, "")
+      .replace(/\u00A0/g, "")
+      .replace(/[^\d,.\-]/g, "")
+      .replace(",", ".");
+    
+    const v = parseFloat(normalized);
+    return Number.isNaN(v) ? undefined : v;
+  }
+
+  function formatPln(value) {
+    try {
+      return new Intl.NumberFormat("pl-PL", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value);
+    } catch {
+      return value.toFixed(2).replace(".", ",");
+    }
+  }
+
+  function getCartTotal() {
+    const el = document.querySelector(".total-sum-price");
+    const raw = el?.innerText || el?.textContent;
+    const fromDom = parsePlnFromText(raw);
+    if (typeof fromDom === "number" && fromDom > 0) {
+      return fromDom;
+    }
+    return currentCartTotal;
+  }
+
+  function ensureStyles() {
+    if (document.getElementById("fotouslugi-cross-sell-style")) return;
+    const style = document.createElement("style");
+    style.id = "fotouslugi-cross-sell-style";
+    style.textContent = `
+      .cewe-free-delivery {
+        max-width: 75%;
+        margin: 10px 0 14px auto;
+        padding: 12px 14px;
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        background: #fff;
+        font-family: Arial, sans-serif;
+        display: none;
+      }
+      .cewe-free-delivery.is-visible {
+        display: block;
+      }
+      @media (max-width: 767px) {
+        .cewe-free-delivery {
+          max-width: none;
+          margin: 10px 12px 14px 12px;
+        }
+      }
+      .cewe-free-delivery__upsell {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        background: #fdf2f2;
+        border-radius: 6px;
+        margin-bottom: 12px;
+        border: 1px dashed #d91c1c;
+      }
+      .cewe-free-delivery__upsell.is-active {
+        display: flex;
+      }
+      .cewe-free-delivery__upsell-icon {
+        width: 20px;
+        height: 20px;
+        flex: 0 0 auto;
+        fill: #d91c1c;
+      }
+      .cewe-free-delivery__upsell-text {
+        font-size: 13px;
+        color: #d91c1c;
+        line-height: 1.3;
+      }
+      .cewe-free-delivery__upsell-link {
+        color: #d91c1c;
+        text-decoration: underline;
+        font-weight: 700;
+      }
+      .cewe-free-delivery__row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+      .cewe-free-delivery__title {
+        font-size: 13px;
+        color: #222;
+        line-height: 1.25;
+      }
+      .cewe-free-delivery__title strong { font-weight: 700; }
+      .cewe-free-delivery__track {
+        position: relative;
+        height: 12px;
+        background: #eee;
+        border-radius: 999px;
+        margin: 12px 0;
+      }
+      .cewe-free-delivery__bar {
+        height: 100%;
+        width: 0%;
+        background: #d91c1c;
+        border-radius: 999px;
+        transition: width .35s ease, background-color .35s ease;
+      }
+      .cewe-free-delivery__bar.is-complete {
+        background: #4FBB02;
+      }
+      .cewe-free-delivery__thumb {
+        position: absolute;
+        top: 50%;
+        left: 0%;
+        transform: translate(-50%, -50%);
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
+        border-radius: 25%;
+        background: #fff;
+        border: 2px solid #d91c1c;
+        box-shadow: 0 2px 4px rgba(0,0,0,.1);
+        pointer-events: none;
+        transition: left .35s ease, border-color .35s ease;
+        z-index: 2;
+      }
+      .cewe-free-delivery__thumb.is-complete {
+        border-color: #4FBB02;
+      }
+      .cewe-free-delivery__truck {
+        width: 18px;
+        height: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .cewe-free-delivery__truck svg {
+        width: 100%;
+        height: 100%;
+        display: block;
+        fill: #d91c1c;
+        transition: fill .35s ease;
+      }
+      .cewe-free-delivery__thumb.is-complete svg {
+        fill: #4FBB02;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function getMountPoint() {
+    // W checkout SPA `cw-items-table` bywa re-renderowany i usuwa nasze wstawki.
+    // Stabilniejszym miejscem jest okolica nagłówka strony.
+    const header = document.querySelector("cw-page-header");
+    if (header?.parentElement) {
+      return { parent: header.parentElement, after: header };
+    }
+
+    // Fallback: jeśli nie ma nagłówka, wracamy do pierwotnego miejsca.
+    const itemsTable = document.querySelector("cw-items-table");
+    if (itemsTable) return { parent: itemsTable, after: null };
+    return null;
+  }
+
+  function ensureWidget() {
+    ensureStyles();
+    const mount = getMountPoint();
+    if (!mount) return null;
+
+    const existing = mount.parent.querySelector("[data-it-name='free-delivery-progress-upsell']");
+    if (existing) return existing;
+
+    const widget = document.createElement("div");
+    widget.className = "cewe-free-delivery";
+    widget.setAttribute("data-it-name", "free-delivery-progress-upsell");
+    widget.innerHTML = `
+      <div class="cewe-free-delivery__upsell" data-role="upsell">
+        <svg class="cewe-free-delivery__upsell-icon" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="3.2"/>
+          <path d="M9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/>
+        </svg>
+        <div class="cewe-free-delivery__upsell-text" data-role="upsell-text"></div>
+      </div>
+      <div class="cewe-free-delivery__row">
+        <div class="cewe-free-delivery__title" data-role="title"></div>
+      </div>
+      <div class="cewe-free-delivery__track" aria-label="Postęp do darmowej dostawy">
+        <div class="cewe-free-delivery__bar" data-role="bar"></div>
+        <div class="cewe-free-delivery__thumb" data-role="thumb" aria-hidden="true">
+          <span class="cewe-free-delivery__truck" aria-hidden="true" data-role="thumb-icon">
+            <svg viewBox="0 0 297 297">
+              <path d="M242.309,210.424c-14.535,0-26.359,11.84-26.359,26.398c0,14.564,11.824,26.412,26.359,26.412 c14.541,0,26.362-11.848,26.362-26.412C268.671,222.264,256.85,210.424,242.309,210.424z"/>
+              <path d="M64.565,210.424c-14.542,0-26.366,11.84-26.366,26.398c0,14.564,11.824,26.412,26.366,26.412 c14.534,0,26.358-11.848,26.358-26.412C90.924,222.264,79.1,210.424,64.565,210.424z"/>
+              <path d="M257.182,99.523c-1.391-4.191-5.313-7.023-9.732-7.023H234.99v43.828h34.384L257.182,99.523z"/>
+              <path d="M290.21,152.73h-55.22v41.928c2.379-0.408,4.825-0.637,7.318-0.637c22.033,0,40.225,16.77,42.515,38.225h1.93 c5.657,0,10.247-4.59,10.247-10.254v-59.623C297,157.92,294.164,154.152,290.21,152.73z"/>
+              <path d="M218.199,44.02c0-5.664-4.59-10.254-10.248-10.254H10.247C4.59,33.766,0,38.355,0,44.02v177.973 c0,5.664,4.59,10.254,10.247,10.254h11.8c2.291-21.455,20.482-38.225,42.519-38.225c22.029,0,40.217,16.77,42.508,38.225h80.925 h11.8c1.38-12.918,8.521-24.123,18.796-31.008L218.199,44.02z"/>
+            </svg>
+          </span>
+        </div>
+      </div>
+    `;
+
+    if (mount.after && mount.after.parentNode === mount.parent) {
+      mount.parent.insertBefore(widget, mount.after.nextSibling);
+    } else {
+      // fallback: na początek parenta
+      mount.parent.insertBefore(widget, mount.parent.firstChild);
+    }
+
+    return widget;
+  }
+
+  function update() {
+    const widget = ensureWidget();
+    if (!widget) return;
+
+    const total = getCartTotal();
+    const shipping = currentShippingType;
+
+    const upsell = widget.querySelector("[data-role='upsell']");
+    const upsellText = widget.querySelector("[data-role='upsell-text']");
+    const bar = widget.querySelector("[data-role='bar']");
+    const thumb = widget.querySelector("[data-role='thumb']");
+
+    // Show only for POS
+    const shouldBeVisible = shipping === "pos";
+    if (widget.classList.contains("is-visible") !== shouldBeVisible) {
+      widget.classList.toggle("is-visible", shouldBeVisible);
+    }
+
+    if (!shouldBeVisible) return;
+
+    const title = widget.querySelector("[data-role='title']");
+
+    const remaining = Math.max(0, POS_THRESHOLD - (total || 0));
+    const progressPercent = clamp(((total || 0) / POS_THRESHOLD) * 100, 0, 100);
+    const isComplete = (total || 0) >= POS_THRESHOLD;
+
+    if (title) {
+      const newTitleText = isComplete
+        ? "Gratulacje! Masz darmowy odbiór w drogerii."
+        : `Brakuje Ci ${formatPln(remaining)} zł do darmowego odbioru w drogerii.`;
+      if (title.textContent !== newTitleText) title.textContent = newTitleText;
+    }
+
+    if (bar) {
+      const barComplete = bar.classList.contains("is-complete");
+      if (barComplete !== isComplete) bar.classList.toggle("is-complete", isComplete);
+      const newWidth = `${progressPercent}%`;
+      if (bar.style.width !== newWidth) bar.style.width = newWidth;
+    }
+
+    if (thumb) {
+      const thumbComplete = thumb.classList.contains("is-complete");
+      if (thumbComplete !== isComplete) thumb.classList.toggle("is-complete", isComplete);
+      const newLeft = `${progressPercent}%`;
+      if (thumb.style.left !== newLeft) thumb.style.left = newLeft;
+    }
+
+    if (upsell) {
+      const shouldUpsellActive = !isComplete && remaining > 0;
+      if (upsell.classList.contains("is-active") !== shouldUpsellActive) {
+        upsell.classList.toggle("is-active", shouldUpsellActive);
+      }
+
+      if (shouldUpsellActive && upsellText) {
+        // Bez innerHTML / bez <strong> / bez &nbsp; (na QA HTML bywa sanitizowany).
+        const remainingText = `${formatPln(remaining)} zł`;
+
+        const setTextOnly = (text) => {
+          if (upsellText.textContent !== text) upsellText.textContent = text;
+        };
+
+        const setWithLinks = (prefix, links, suffix) => {
+          const signature = [prefix, ...links.map((l) => `${l.href}|${l.text}`), suffix].join("||");
+          if (upsellText.dataset.signature === signature) return;
+          upsellText.dataset.signature = signature;
+          upsellText.textContent = "";
+          upsellText.appendChild(document.createTextNode(prefix));
+          links.forEach((l, i) => {
+            if (i > 0) upsellText.appendChild(document.createTextNode(" lub "));
+            const a = document.createElement("a");
+            a.href = l.href;
+            a.className = "cewe-free-delivery__upsell-link";
+            a.textContent = l.text;
+            upsellText.appendChild(a);
+          });
+          upsellText.appendChild(document.createTextNode(suffix));
+        };
+
+        if (remaining >= UPSELL_HIGH_REMAINING_THRESHOLD) {
+          setWithLinks(
+            `Do darmowej dostawy brakuje Ci ${remainingText}. Dobierz `,
+            [
+              {
+                href: "https://www.fotouslugi.pl/fotoprezenty/kula-ze-zdjeciem.html",
+                text: "kulę ze zdjęciem",
+              },
+              {
+                href: "https://www.fotouslugi.pl/zdjecia/zdjecie-w-ramce.html",
+                text: "zdjęcie w ramce",
+              },
+            ],
+            " i odbierz zamówienie za darmo w drogerii."
+          );
+        } else if (hasPhotosInCart) {
+          setWithLinks(
+            `Do darmowej dostawy brakuje Ci ${remainingText}. Dobierz `,
+            [
+              {
+                href: "https://www.fotouslugi.pl/dodatki-do-fotoproduktow.html#dodatki-do-zdjec",
+                text: "dodatki do zdjęć",
+              },
+            ],
+            " i odbierz zamówienie za darmo w drogerii."
+          );
+        } else {
+          // tu copy bez dwóch linków
+          // (zostawiamy link do zdjęć jako jedyny element klikalny)
+          setWithLinks(
+            `Do darmowej dostawy brakuje Ci ${remainingText}. Dobierz `,
+            [{ href: "https://www.fotouslugi.pl/zdjecia/standard.html", text: "zdjęcia" }],
+            " i odbierz zamówienie za darmo w drogerii."
+          );
+        }
+      }
+    }
+  }
+
+  // Hook na zmianę widoku w SPA (hash/history/popstate): na koszyku odpal bootstrap ponownie.
+  function startSpaViewHook() {
+    let lastKey = `${location.pathname}${location.search}${location.hash}`;
+
+    const onChange = () => {
+      const key = `${location.pathname}${location.search}${location.hash}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      if (!isShoppingCartView()) return;
+      // daj SPA czas na render po zmianie view
+      setTimeout(() => {
         startTotalSumObserver();
-        startObserving();
-        startBootstrapRetry();
-        scheduleUpdate();
+        startFrBootstrap();
+        initQtyMiniBars();
+      }, 100);
+    };
 
-        // Fallback
-        setInterval(scheduleUpdate, 2000);
+    window.addEventListener("hashchange", onChange);
+    window.addEventListener("popstate", onChange);
 
-    })();
+    const wrap = (fnName) => {
+      const orig = history[fnName];
+      if (typeof orig !== "function") return;
+      history[fnName] = function () {
+        const ret = orig.apply(this, arguments);
+        onChange();
+        return ret;
+      };
+    };
+    wrap("pushState");
+    wrap("replaceState");
+  }
 
+  initDataLayer();
+  startTotalSumObserver();
+  startFrBootstrap();
+  startSpaViewHook();
+  setTimeout(initQtyMiniBars, 500);
+  scheduleUpdate();
+
+})();
 
 </script>
